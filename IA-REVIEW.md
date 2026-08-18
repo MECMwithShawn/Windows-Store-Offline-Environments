@@ -12,6 +12,8 @@ disconnected enterprise MECM environments.
 
 **Version reviewed:** 2.0
 
+**Release:** Release v2.0
+
 **Source revision reviewed:** `dc1d14d0a0c0af2f412c03af165f110b989ee5b2`
 (2026-08-18)
 

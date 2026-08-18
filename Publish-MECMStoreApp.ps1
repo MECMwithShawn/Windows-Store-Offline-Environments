@@ -12,6 +12,9 @@
     sequenced in the correct install order (frameworks first, main apps last).
     Supports processing single or multiple downloaded applications in batch.
 
+.NOTES
+    Release v2.0
+
 .PARAMETER PackagePath
     Local or UNC directory containing downloaded app packages. If omitted, the
     script prompts or auto-discovers packages in .\StoreDownloads.
