@@ -179,6 +179,8 @@ uses the Configuration Manager PowerShell module and AppManagement SDK to:
 
 - Create console folders.
 - Create applications and native AppX deployment types.
+- Validate the target SMB share ACL and prompt before granting missing
+  `Everyone: Read` or `BUILTIN\Administrators: Change` entries.
 - Set execution context for device-wide provisioning.
 - Create sequenced Application Groups.
 - Assign icons extracted from package content.
@@ -203,6 +205,12 @@ interactive or parameter-based selection, removes deployments before their
 objects, optionally removes empty console folders, and can delete staged UNC
 content. It declares `ConfirmImpact = High`, supports `ShouldProcess`, and
 provides `-WhatIf`; `-Force` bypasses prompts.
+
+Removal eligibility is based on an explicit
+`[WindowsStoreOfflineToolkit:v2]` description marker. Exact legacy descriptions
+written by the previous publisher remain supported for compatibility. Names,
+partial-name searches, and generic AppX/MSIX deployment types are not ownership
+evidence, and `-AppName` searches only within this bounded inventory.
 
 When `-RemoveStagedContent` is combined with `-All` (or a selection interpreted
 as all discovered Store apps), the script recursively deletes every first-level
@@ -278,6 +286,7 @@ user account or with broader share permissions than required.
 | Download packages | Write permission to `OutDir`; outbound HTTPS access. |
 | Read and transfer packages | Read permission to download output and access to the approved transfer mechanism. |
 | Stage MECM content | Create/write permission beneath the dedicated content-source share. |
+| Inspect/repair share ACL | Read access to SMB share configuration; share-administration rights locally or through CIM to grant approved entries. |
 | Create applications/groups | MECM RBAC rights for applications, deployment types, folders, and Application Groups. |
 | Distribute content | MECM distribution permissions for the selected DP/DP group. |
 | Assign icons | Read access to packages and modify rights on target MECM objects. |
@@ -305,6 +314,11 @@ delegated to Windows ACLs, share ACLs, and MECM RBAC.
 `Publish-MECMStoreApp.ps1` creates versioned package directories beneath
 `ContentShare`, including a shared `_Frameworks` hierarchy. Existing destination
 files with equal length are skipped; differing files are overwritten.
+
+Before those writes, it checks the SMB share ACL. Missing `Everyone: Read` and
+`BUILTIN\Administrators: Change` Allow entries are displayed and require an
+interactive confirmation before repair. Stronger rights satisfy the check;
+explicit Deny entries are not removed. The check does not validate NTFS ACLs.
 
 ### 8.3 MECM writes
 
@@ -380,6 +394,8 @@ end-user content.
 | Content-host filter | Response URLs are accepted only when matching Microsoft delivery or Windows Update patterns. |
 | No embedded credentials | Static review found no operational credentials or secret storage. |
 | Change preview | Publisher, icon tool, and cleanup tool implement `ShouldProcess`; `-WhatIf` is available. |
+| Share ACL preflight | Publisher verifies minimum SMB share rights, prompts before repair, refuses to override Deny entries, and stops staging when known requirements remain unmet. |
+| Removal ownership boundary | Publisher applies a versioned description marker; remover limits every selection path to marked or exact legacy-owned MECM objects. |
 | Destructive confirmation | Cleanup declares `ConfirmImpact = High`; `-Force` is explicit. |
 | Dependency ordering | Frameworks are ordered before consuming applications. |
 | Architecture filtering | Default is x64 with neutral packages where appropriate. |
@@ -398,7 +414,7 @@ end-user content.
 
 **Confidence:** HIGH
 
-**Status:** OPEN
+**Status:** PARTIALLY MITIGATED
 
 FE3 metadata exposes a `FileDigest`, and the script uses that digest as a key to
 associate a returned URL with package metadata. After download, however, the
@@ -425,10 +441,12 @@ validation failure as fatal.
 
 **Status:** OPEN
 
-When `Remove-MECMStoreApp.ps1` is run with staged-content removal and its
-selection is interpreted as all applications, it recursively deletes every
-first-level directory beneath `ContentShare`. `ShouldProcess`, high confirmation
-impact, and `WhatIf` are present, but `-Force` can bypass confirmation.
+When `Remove-MECMStoreApp.ps1` is explicitly run for all toolkit objects with
+staged-content removal, it recursively deletes every first-level directory
+beneath `ContentShare`. Count-based inference of an all-object selection has
+been removed, but `ShouldProcess`, high confirmation impact, and `WhatIf` remain
+operator controls rather than a filesystem ownership boundary; `-Force` can
+bypass confirmation.
 
 **Impact:** A mistyped or shared UNC root can cause deletion of unrelated source
 content and corresponding operational outage.
@@ -534,6 +552,53 @@ and may be consumed by a later run.
 
 **Required action:** Use a unique per-run temporary directory, validate the
 resolved path remains under that directory, and delete it in a `finally` block.
+
+### IA-08 — Default `Everyone: Read` share access may exceed local policy
+
+**Severity:** MEDIUM
+
+**Confidence:** HIGH
+
+**Status:** OPEN / ORGANIZATIONAL CONTROL
+
+The publisher's share preflight treats `Everyone: Read` as a required minimum
+and can grant it after interactive confirmation. Although this matches the
+documented DEV configuration, `Everyone` may be broader than the approved
+reader population in a production or disconnected enclave. The preflight also
+does not assess NTFS ACLs, which remain independently authoritative.
+
+**Impact:** An overly broad share-level principal can expose package-source
+content to more authenticated or network-reachable users than intended,
+depending on host policy and the effective NTFS permissions.
+
+**Required action:** Obtain system-owner/IA approval for `Everyone: Read`, or
+replace it with an organization-managed MECM/DP reader group. Maintain
+least-privilege NTFS ACLs and verify effective access from representative
+administrative, site-server, DP, and unauthorized accounts.
+
+### IA-09 — Name-based removal selected an unrelated Notepad++ application
+
+**Severity:** HIGH
+
+**Confidence:** HIGH
+
+**Status:** REMEDIATED IN CURRENT SOURCE
+
+The previous cleanup discovery logic included a fallback name expression that
+matched `Notepad`, causing an unrelated `Notepad++` MECM application to enter the
+removal set. The explicit `-AppName` path also searched all applications, and
+the all-groups path selected every Application Group rather than only objects
+created by this toolkit.
+
+**Impact:** An approved cleanup run could delete applications or groups outside
+the Store-offline deployment scope, including active deployments.
+
+**Remediation:** The publisher now stamps new applications and groups with a
+versioned ownership marker. The remover accepts only that marker or the exact
+legacy descriptions emitted by the publisher. Interactive selection,
+`-AppName`, `-All`, automatic group inclusion, and staged-content behavior are
+all bounded to the owned inventory. Regression tests confirm that Notepad++ and
+unrelated groups are excluded.
 
 ---
 

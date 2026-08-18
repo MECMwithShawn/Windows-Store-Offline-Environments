@@ -27,7 +27,7 @@ Built specifically for **disconnected, air-gapped, isolated, and enterprise MECM
 |---|---|
 | [`Download-StoreApp.ps1`](Download-StoreApp.ps1) | Downloads Store app packages and required framework dependencies directly from Microsoft delivery servers (defaults to `x64`). |
 | [`Publish-MECMStoreApp.ps1`](Publish-MECMStoreApp.ps1) | Automates creating native MECM applications with "Provision for all users", stages content to UNC, and builds sequenced **Application Groups**. |
-| [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) | Cleanup utility for testing: safely removes Application Groups, Applications, Console Folders, and staged UNC content. |
+| [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) | Cleanup utility for testing: removes toolkit-owned Application Groups, Applications, Console Folders, and optional staged UNC content. |
 | [`MECM-Store-App-Deployment-Guide.md`](MECM-Store-App-Deployment-Guide.md) | Comprehensive step-by-step guide for creating native MECM applications and sequencing them in an **Application Group**. |
 
 ---
@@ -191,6 +191,9 @@ powershell -ExecutionPolicy Bypass -File .\Publish-MECMStoreApp.ps1 -All -WhatIf
 > [!TIP]
 > **Device-Wide Provisioning**: `Publish-MECMStoreApp.ps1` automatically configures **[X] Provision this application for all users on the device** on every deployment type via the official Configuration Manager AppManagement SDK (`Microsoft.ConfigurationManagement.ApplicationManagement.Win8Installer.dll` and `SccmSerializer`).
 
+> [!IMPORTANT]
+> **Content-share permission preflight**: Before writing package content, the publisher checks the SMB share identified by `-ContentShare`. `Everyone` must have at least **Read** and `BUILTIN\Administrators` must have at least **Change**. If either entry is missing, the script shows the missing rights and prompts before granting only those entries with `Grant-SmbShareAccess`. `-WhatIf` previews the grants without changing the share. Explicit Deny entries are never removed automatically, and staging stops if the required permissions remain unavailable. This validates the SMB share ACL only; configure NTFS permissions separately according to organizational policy.
+
 ---
 
 ## Understanding the output
@@ -218,7 +221,7 @@ StoreDownloads\
 2. **Transfer**: Copy the resulting package folders into your disconnected environment.
 3. **Deploy via MECM**:
    - **Recommended (Automated)**: Run [`Publish-MECMStoreApp.ps1`](Publish-MECMStoreApp.ps1) to stage UNC content, create applications with device-wide provisioning, and build the sequenced **Application Group**.
-   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to cleanly delete Application Groups, Applications, Console Folders, and staged packages.
+   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to delete toolkit-owned Application Groups, Applications, Console Folders, and staged packages. Current objects carry a `[WindowsStoreOfflineToolkit:v2]` description marker; the remover also recognizes the exact legacy descriptions created by earlier releases. Names alone are never treated as proof of ownership.
    - **Manual Console Setup**: Follow the [MECM Store App Deployment Guide](MECM-Store-App-Deployment-Guide.md) to create native *Windows app package* applications and sequence them in an **Application Group**.
 
 ### Mental Model: MSI vs. APPX/MSIX (Device-Targeted Deployments)

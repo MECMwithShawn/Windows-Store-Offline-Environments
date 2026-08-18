@@ -166,15 +166,48 @@ $wmiNamespace = "root\sms\site_$connectedSite"
 Write-Host "`nScanning MECM for Store Applications and Application Groups..." -ForegroundColor Cyan
 
 $allGroups = @(Get-CMApplicationGroup -ErrorAction SilentlyContinue)
-$allApps = @(Get-CMApplication -Fast -ErrorAction SilentlyContinue)
+$allApps = @(Get-CMApplication -ErrorAction SilentlyContinue)
 
 $frameworkKeywords = @('VCLibs', 'UI.Xaml', 'NET.Native', 'WindowsAppRuntime', 'WinAppRuntime')
+$toolkitMarkerPattern = '^\[WindowsStoreOfflineToolkit:v\d+\]\s+'
 
-# Classify Store apps vs Frameworks
+function Get-CMObjectDescription {
+    param([object]$InputObject)
+
+    foreach ($propertyName in 'LocalizedDescription', 'Description') {
+        $property = $InputObject.PSObject.Properties[$propertyName]
+        if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return ''
+}
+
+function Test-ToolkitOwnedApplication {
+    param([object]$Application)
+
+    $description = Get-CMObjectDescription -InputObject $Application
+    return ($description -match $toolkitMarkerPattern -or
+        $description -match '^Offline Windows Store Package \([^)]+\)$')
+}
+
+function Test-ToolkitOwnedApplicationGroup {
+    param([object]$ApplicationGroup)
+
+    $description = Get-CMObjectDescription -InputObject $ApplicationGroup
+    return ($description -match $toolkitMarkerPattern -or
+        $description -match '^Offline deployment group for .+ and required dependencies$')
+}
+
+$discoveredGroups = @($allGroups | Where-Object { Test-ToolkitOwnedApplicationGroup -ApplicationGroup $_ })
+
+# Classify only applications created by this toolkit
 $discoveredStoreApps = @()
 $discoveredFrameworks = @()
 
 foreach ($a in $allApps) {
+    if (-not (Test-ToolkitOwnedApplication -Application $a)) { continue }
+
     $name = $a.LocalizedDisplayName
     $isFw = $false
     foreach ($kw in $frameworkKeywords) {
@@ -184,13 +217,7 @@ foreach ($a in $allApps) {
     if ($isFw) {
         $discoveredFrameworks += $a
     } else {
-        # Check if it has an AppX deployment type or matches Store app conventions
-        $dt = Get-CMDeploymentType -ApplicationName $name -ErrorAction SilentlyContinue
-        if ($dt -and ($dt.Technology -match '(?i)Windows8App' -or $dt.DeploymentTypeName -match '(?i)AppX|MSIX')) {
-            $discoveredStoreApps += $a
-        } elseif ($name -match '(?i)Notepad|Terminal|StoreApp|Test\.Store') {
-            $discoveredStoreApps += $a
-        }
+        $discoveredStoreApps += $a
     }
 }
 
@@ -200,9 +227,10 @@ foreach ($a in $allApps) {
 $selectedAppsToRemove = @()
 $selectedGroupsToRemove = @()
 $cleanFrameworks = $IncludeFrameworks.IsPresent -or $All.IsPresent
+$removeAllDiscovered = $All.IsPresent
 
 if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
-    if ($discoveredStoreApps.Count -eq 0 -and $allGroups.Count -eq 0 -and $discoveredFrameworks.Count -eq 0) {
+    if ($discoveredStoreApps.Count -eq 0 -and $discoveredGroups.Count -eq 0 -and $discoveredFrameworks.Count -eq 0) {
         Write-Host "No Store Applications or Application Groups found in MECM." -ForegroundColor Yellow
         if ($KeepFolders) {
             # Nothing at all to do
@@ -213,8 +241,8 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
     } else {
         Write-Host "`nDiscovered MECM Store Items:" -ForegroundColor Yellow
         Write-Host "--- Application Groups ---" -ForegroundColor Cyan
-        for ($i = 0; $i -lt $allGroups.Count; $i++) {
-            Write-Host ("  [G{0}] Group: {1}" -f ($i + 1), $allGroups[$i].LocalizedDisplayName)
+        for ($i = 0; $i -lt $discoveredGroups.Count; $i++) {
+            Write-Host ("  [G{0}] Group: {1}" -f ($i + 1), $discoveredGroups[$i].LocalizedDisplayName)
         }
 
         Write-Host "--- Store Applications ---" -ForegroundColor Cyan
@@ -240,10 +268,11 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
 
         if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed -match '^(a|all)$') {
             $selectedAppsToRemove = $discoveredStoreApps
-            $selectedGroupsToRemove = $allGroups
+            $selectedGroupsToRemove = $discoveredGroups
             $cleanFrameworks = $true
+            $removeAllDiscovered = $true
         } elseif ($trimmed -match '^(g|groups)$') {
-            $selectedGroupsToRemove = $allGroups
+            $selectedGroupsToRemove = $discoveredGroups
         } elseif ($trimmed -match '^(f|folders)$') {
             # Folder cleanup only — nothing to add to selected lists
         } else {
@@ -251,8 +280,8 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
             foreach ($p in $parts) {
                 if ($p -match '^g(\d+)$') {
                     $idx = [int]$Matches[1] - 1
-                    if ($idx -ge 0 -and $idx -lt $allGroups.Count) {
-                        $selectedGroupsToRemove += $allGroups[$idx]
+                    if ($idx -ge 0 -and $idx -lt $discoveredGroups.Count) {
+                        $selectedGroupsToRemove += $discoveredGroups[$idx]
                     }
                 } elseif ($p -match '^a(\d+)$') {
                     $idx = [int]$Matches[1] - 1
@@ -263,7 +292,7 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
                     # Match by string name
                     $matchedApp = $discoveredStoreApps | Where-Object { $_.LocalizedDisplayName -like "*$p*" }
                     if ($matchedApp) { $selectedAppsToRemove += $matchedApp }
-                    $matchedGrp = $allGroups | Where-Object { $_.LocalizedDisplayName -like "*$p*" }
+                    $matchedGrp = $discoveredGroups | Where-Object { $_.LocalizedDisplayName -like "*$p*" }
                     if ($matchedGrp) { $selectedGroupsToRemove += $matchedGrp }
                 }
             }
@@ -271,15 +300,15 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0)) {
     } # end else (apps/groups were found — interactive menu complete)
 } elseif ($All) {
     $selectedAppsToRemove = $discoveredStoreApps
-    $selectedGroupsToRemove = $allGroups
+    $selectedGroupsToRemove = $discoveredGroups
     $cleanFrameworks = $true
 } else {
     # AppName specified
     foreach ($pattern in $AppName) {
-        $matchedApps = $allApps | Where-Object { $_.LocalizedDisplayName -like "*$pattern*" }
+        $matchedApps = @($discoveredStoreApps + $discoveredFrameworks) | Where-Object { $_.LocalizedDisplayName -like "*$pattern*" }
         $selectedAppsToRemove += $matchedApps
 
-        $matchedGrps = $allGroups | Where-Object { $_.LocalizedDisplayName -like "*$pattern*" }
+        $matchedGrps = $discoveredGroups | Where-Object { $_.LocalizedDisplayName -like "*$pattern*" }
         $selectedGroupsToRemove += $matchedGrps
     }
 }
@@ -294,7 +323,7 @@ if ($cleanFrameworks) {
 
 # Also automatically add groups that contain the selected apps to prevent foreign key errors
 foreach ($appObj in $selectedAppsToRemove) {
-    foreach ($grp in $allGroups) {
+    foreach ($grp in $discoveredGroups) {
         if ($selectedGroupsToRemove -notcontains $grp) {
             # Check if group references this app
             $grpFull = Get-CMApplicationGroup -Name $grp.LocalizedDisplayName -ErrorAction SilentlyContinue
@@ -578,7 +607,7 @@ if ($RemoveStagedContent) {
     }
 
     if ($contentExists) {
-        if ($All -or ($selectedAppsToRemove.Count -ge $discoveredStoreApps.Count -and $discoveredStoreApps.Count -gt 0)) {
+        if ($removeAllDiscovered) {
             # Wipe subfolders in share
             Get-ChildItem -Path "Microsoft.PowerShell.Core\FileSystem::$targetShare" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
                 if ($PSCmdlet.ShouldProcess($_.FullName, "Delete staged content folder")) {

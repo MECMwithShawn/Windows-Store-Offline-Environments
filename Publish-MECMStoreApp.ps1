@@ -26,6 +26,8 @@
     Target UNC root share where MECM package folders will be hosted.
     Defaults to '\\<ServerName>\Software\Microsoft\Windows Store Apps'.
     Packages are staged into '<AppName>\v.<Version>' subfolders.
+    Before staging, the script verifies the required SMB share permissions and
+    prompts before granting any missing entries.
 
 .PARAMETER SiteCode
     The 3-letter MECM Site Code (e.g. 'PS1'). If omitted, the script attempts
@@ -778,7 +780,108 @@ function Get-AppxPackageIcon {
 }
 
 # ------------------------------------------------------------------------------
-# 7. Connect to MECM / Configuration Manager
+# 7. Validate and optionally repair the SMB share permissions
+# ------------------------------------------------------------------------------
+function Confirm-ContentSharePermissions {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if ($Path -notmatch '^\\\\(?<Server>[^\\]+)\\(?<Share>[^\\]+)(?:\\|$)') {
+        Write-Warning "Cannot validate SMB share permissions because '$Path' is not a UNC path."
+        return $true
+    }
+
+    if (-not (Get-Command Get-SmbShareAccess -ErrorAction SilentlyContinue) -or
+        -not (Get-Command Grant-SmbShareAccess -ErrorAction SilentlyContinue)) {
+        Write-Warning 'SMB share permission cmdlets are unavailable; skipping the share ACL preflight.'
+        return $true
+    }
+
+    $serverName = $Matches.Server
+    $shareName = $Matches.Share
+    $localNames = @('.', 'localhost', $env:COMPUTERNAME)
+    if ($env:COMPUTERNAME) { $localNames += "$($env:COMPUTERNAME).$env:USERDNSDOMAIN" }
+    $isLocalShare = $localNames -contains $serverName
+    $cimSession = $null
+
+    try {
+        $shareParams = @{ Name = $shareName; ErrorAction = 'Stop' }
+        if (-not $isLocalShare) {
+            $cimSession = New-CimSession -ComputerName $serverName -ErrorAction Stop
+            $shareParams.CimSession = $cimSession
+        }
+
+        $currentAccess = @(Get-SmbShareAccess @shareParams)
+        $requiredAccess = @(
+            [pscustomobject]@{ AccountName = 'Everyone'; MinimumRight = 'Read' },
+            [pscustomobject]@{ AccountName = 'BUILTIN\Administrators'; MinimumRight = 'Change' }
+        )
+        $missingAccess = @()
+
+        foreach ($required in $requiredAccess) {
+            $matchingEntries = @($currentAccess | Where-Object { $_.AccountName -ieq $required.AccountName })
+            $denyEntry = $matchingEntries | Where-Object { $_.AccessControlType -eq 'Deny' } | Select-Object -First 1
+            if ($denyEntry) {
+                Write-Warning "Share '\\$serverName\$shareName' has an explicit Deny entry for '$($required.AccountName)'. Remove or review that Deny entry manually; this script will not override it."
+                return $false
+            }
+
+            $allowedRights = if ($required.MinimumRight -eq 'Read') { @('Read', 'Change', 'Full') } else { @('Change', 'Full') }
+            $hasRequiredAccess = $matchingEntries | Where-Object {
+                $_.AccessControlType -eq 'Allow' -and $allowedRights -contains $_.AccessRight.ToString()
+            } | Select-Object -First 1
+            if (-not $hasRequiredAccess) { $missingAccess += $required }
+        }
+
+        if (-not $missingAccess.Count) {
+            Write-Host "SMB share permissions verified: \\$serverName\$shareName" -ForegroundColor Green
+            return $true
+        }
+
+        $missingText = ($missingAccess | ForEach-Object { "  - $($_.AccountName): $($_.MinimumRight)" }) -join "`n"
+        if ($WhatIfPreference) {
+            foreach ($entry in $missingAccess) {
+                $null = $PSCmdlet.ShouldProcess("\\$serverName\$shareName", "Grant $($entry.AccountName) $($entry.MinimumRight) share access")
+            }
+            return $true
+        }
+
+        if ([Console]::IsInputRedirected -or -not $PSCmdlet.ShouldContinue(
+            "The following required share permissions are missing on '\\$serverName\$shareName':`n$missingText`n`nGrant the missing permissions now?",
+            'Repair SMB share permissions')) {
+            Write-Warning "Required SMB share permissions were not repaired. Run:`nGrant-SmbShareAccess -Name `"$shareName`" -AccountName `"Everyone`" -AccessRight Read -Force`nGrant-SmbShareAccess -Name `"$shareName`" -AccountName `"BUILTIN\Administrators`" -AccessRight Change -Force"
+            return $false
+        }
+
+        foreach ($entry in $missingAccess) {
+            if ($PSCmdlet.ShouldProcess("\\$serverName\$shareName", "Grant $($entry.AccountName) $($entry.MinimumRight) share access")) {
+                $grantParams = @{
+                    Name        = $shareName
+                    AccountName = $entry.AccountName
+                    AccessRight = $entry.MinimumRight
+                    Force       = $true
+                    ErrorAction = 'Stop'
+                }
+                if ($cimSession) { $grantParams.CimSession = $cimSession }
+                Grant-SmbShareAccess @grantParams | Out-Null
+            }
+        }
+
+        Write-Host "SMB share permissions repaired: \\$serverName\$shareName" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Warning "Could not validate or repair SMB share permissions for '\\$serverName\$shareName': $($_.Exception.Message)"
+        return $false
+    } finally {
+        if ($cimSession) { Remove-CimSession -CimSession $cimSession -ErrorAction SilentlyContinue }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# 8. Connect to MECM / Configuration Manager
 # ------------------------------------------------------------------------------
 $mecmConnected = $false
 
@@ -935,6 +1038,9 @@ foreach ($appFolder in $selectedAppFolders) {
     # Content Share Staging
     $stagedPackages = @()
     $contentRoot = $ContentShare.TrimEnd('\')
+    if (-not (Confirm-ContentSharePermissions -Path $contentRoot -WhatIf:$WhatIfPreference)) {
+        throw "Required SMB share permissions are missing on '$contentRoot'. Staging was stopped before any content was written."
+    }
     Write-Host "`nStaging content to UNC source: $contentRoot" -ForegroundColor Cyan
 
     foreach ($pkg in $orderedPackages) {
@@ -1018,7 +1124,7 @@ foreach ($appFolder in $selectedAppFolders) {
                 $targetApp = New-CMApplication -Name $appName `
                                                -Publisher "Microsoft" `
                                                -SoftwareVersion $pkg.Identity.Version `
-                                               -Description "Offline Windows Store Package ($($pkg.Identity.Architecture))"
+                                               -Description "[WindowsStoreOfflineToolkit:v2] Offline Windows Store Package ($($pkg.Identity.Architecture))"
 
                 Write-Host "  Creating native Windows app package Deployment Type..." -ForegroundColor Yellow
                 
@@ -1083,7 +1189,7 @@ foreach ($appFolder in $selectedAppFolders) {
             }
             $targetGroup = New-CMApplicationGroup -Name $currentAppGroupName `
                                                   -AddApplication $createdAppNames `
-                                                  -Description "Offline deployment group for $mainAppName and required dependencies" `
+                                                  -Description "[WindowsStoreOfflineToolkit:v2] Offline deployment group for $mainAppName and required dependencies" `
                                                   -SoftwareVersion $mainAppVersion
         } else {
             $targetGroup = $existingGroup

@@ -53,8 +53,33 @@ To perform these steps manually in the Configuration Manager console, follow Ste
 
 - Packages downloaded with `Download-StoreApp.ps1`, e.g. `…\Windows Terminal\1.22.12111.0\` containing the main bundle and its dependency `.appx` files.
 - A content source share reachable by the MECM site/DP, referenced by **UNC path** (not a local drive).
+- Rights to read the share ACL and, if repair is approved, permission to run `Grant-SmbShareAccess` on the share server. Remote share servers also require CIM administrative access.
 - MECM current branch **2107 or later** (required for Application Groups and ordered installs) and clients on a matching version.
 - Target devices allow sideloaded/provisioned signed packages (default on supported Windows 10/11; enforce via policy in your base image if locked down). Store packages are Microsoft-signed, so the signing chain is trusted on a standard image.
+
+### Content-share permission preflight
+
+Before staging content, `Publish-MECMStoreApp.ps1` resolves the share portion of
+the configured UNC path and verifies these minimum SMB share permissions:
+
+| Account | Minimum share right | Stronger accepted rights |
+|---|---|---|
+| `Everyone` | Read | Change or Full |
+| `BUILTIN\Administrators` | Change | Full |
+
+If a required Allow entry is missing, the script prompts once before applying
+only the missing grant. Declining the repair, a failed grant, or an explicit Deny
+entry stops staging before content is written. Use `-WhatIf` to preview the
+permission changes. The equivalent manual commands are:
+
+```powershell
+Grant-SmbShareAccess -Name "Software" -AccountName "Everyone" -AccessRight Read -Force
+Grant-SmbShareAccess -Name "Software" -AccountName "BUILTIN\Administrators" -AccessRight Change -Force
+```
+
+The preflight checks the **SMB share ACL**, not NTFS permissions. Maintain NTFS
+ACLs separately, and replace broad principals with organization-approved groups
+if policy does not permit `Everyone: Read`.
 
 ---
 
@@ -283,6 +308,18 @@ Common issues:
 ## Uninstall behavior
 
 Deploying the group as **Uninstall**, or removing each application, reverses the install order. Frameworks are shared, so MECM won't remove a framework that another deployed app still depends on (when modeled via deployment-type dependencies). Remove frameworks manually only when nothing else needs them.
+
+For test-environment object cleanup, `Remove-MECMStoreApp.ps1` only selects
+applications and Application Groups carrying the toolkit description marker
+`[WindowsStoreOfflineToolkit:v2]`. Exact descriptions written by the earlier
+release are retained as a compatibility path. Application names, partial name
+matches, and generic AppX/MSIX deployment types are not sufficient ownership
+evidence; for example, an unrelated `Notepad++` application is excluded.
+
+Always run cleanup with `-WhatIf` first. `-AppName` filters only within the
+toolkit-owned inventory, `-All` includes only toolkit-owned MECM objects, and
+share-wide staged-content cleanup occurs only when all-object cleanup was
+explicitly selected.
 
 ---
 
