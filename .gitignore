@@ -1,0 +1,19 @@
+# Downloaded store packages and staging folders
+StoreDownloads/
+[Ss]tore[Dd]ownloads/
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.eappx
+*.eappxbundle
+*.emsix
+*.emsixbundle
+
+# Temporary files and dumps
+SyncUpdates-dump.xml
+*.log
+*.tmp
+.vs/
+.idea/
+.vscode/
