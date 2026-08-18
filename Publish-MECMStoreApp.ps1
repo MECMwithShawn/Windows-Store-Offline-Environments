@@ -31,6 +31,10 @@
 .PARAMETER SiteServer
     The SMS Provider / Site Server FQDN. Defaults to 'localhost'.
 
+.PARAMETER AdminConsolePath
+    Optional path to the installed ConfigMgr Admin Console bin directory. When
+    supplied, this path takes precedence over registry and fixed-drive discovery.
+
 .PARAMETER AppGroupName
     Custom name for the MECM Application Group. Defaults to
     '<App Name> <Version> - Application Group'.
@@ -74,6 +78,8 @@ param(
     [string]$SiteCode,
 
     [string]$SiteServer = 'localhost',
+
+    [string]$AdminConsolePath,
 
     [string]$AppGroupName,
 
@@ -425,7 +431,107 @@ function Set-MECMConsoleFolder {
 }
 
 # ------------------------------------------------------------------------------
-# 5. Helper: Enable "Provision this application for all users on the device" (SDK)
+# 5. Helper: Locate the installed Admin Console SDK assemblies
+# ------------------------------------------------------------------------------
+function Resolve-ConfigMgrAdminConsoleBin {
+    param(
+        [string]$ExplicitPath,
+        [ref]$CheckedLocations
+    )
+
+    $requiredAssemblies = @(
+        'Microsoft.ConfigurationManagement.ApplicationManagement.dll',
+        'Microsoft.ConfigurationManagement.ApplicationManagement.Win8Installer.dll'
+    )
+    $excludedPathPattern = '(?i)[\\/](CD\.Latest|CMUStaging|EasySetupPayload|backup(?:s)?|SMSSETUP)([\\/]|$)'
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    function Add-AdminConsoleCandidate {
+        param([string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        $candidate = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+        if ([System.IO.Path]::HasExtension($candidate)) { $candidate = Split-Path $candidate -Parent }
+
+        foreach ($possiblePath in @(
+            $candidate,
+            ([System.IO.Path]::Combine($candidate, 'bin')),
+            ([System.IO.Path]::Combine($candidate, 'AdminConsole\bin'))
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace($possiblePath) -and -not $candidates.Contains($possiblePath)) {
+                $candidates.Add($possiblePath)
+            }
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        Add-AdminConsoleCandidate -Path $ExplicitPath
+    } else {
+        Add-AdminConsoleCandidate -Path $env:SMS_ADMIN_UI_PATH
+
+        $registryLocations = @(
+            'HKLM:\SOFTWARE\Microsoft\ConfigMgr10\AdminUI',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\ConfigMgr10\AdminUI',
+            'HKLM:\SOFTWARE\Microsoft\SMS\Setup',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\SMS\Setup'
+        )
+        $registryValueNames = @(
+            'InstallationDirectory', 'InstallDir', 'AdminConsolePath',
+            'AdminConsole', 'UI Installation Directory'
+        )
+        foreach ($registryLocation in $registryLocations) {
+            $registryData = Get-ItemProperty -LiteralPath $registryLocation -ErrorAction SilentlyContinue
+            if (-not $registryData) { continue }
+            foreach ($valueName in $registryValueNames) {
+                $property = $registryData.PSObject.Properties[$valueName]
+                if ($property -and $property.Value -is [string]) {
+                    Add-AdminConsoleCandidate -Path $property.Value
+                }
+            }
+        }
+
+        $fixedDriveRoots = @()
+        try {
+            $fixedDriveRoots = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' -ErrorAction Stop |
+                ForEach-Object { "$($_.DeviceID)\" })
+        } catch {
+            $fixedDriveRoots = @([System.IO.DriveInfo]::GetDrives() |
+                Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed } |
+                ForEach-Object { $_.RootDirectory.FullName })
+        }
+
+        foreach ($driveRoot in $fixedDriveRoots) {
+            Add-AdminConsoleCandidate -Path ([System.IO.Path]::Combine($driveRoot, 'Program Files\Microsoft Configuration Manager\AdminConsole\bin'))
+            Add-AdminConsoleCandidate -Path ([System.IO.Path]::Combine($driveRoot, 'Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin'))
+            Add-AdminConsoleCandidate -Path ([System.IO.Path]::Combine($driveRoot, 'Program Files (x86)\Microsoft Endpoint Manager\AdminConsole\bin'))
+        }
+    }
+
+    $checked = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in $candidates) {
+        if ($candidate -match $excludedPathPattern) { continue }
+        if (-not $checked.Contains($candidate)) { $checked.Add($candidate) }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
+
+        $hasAllAssemblies = $true
+        foreach ($assembly in $requiredAssemblies) {
+            if (-not (Test-Path -LiteralPath ([System.IO.Path]::Combine($candidate, $assembly)) -PathType Leaf)) {
+                $hasAllAssemblies = $false
+                break
+            }
+        }
+        if ($hasAllAssemblies) {
+            $CheckedLocations.Value = @($checked)
+            return $candidate
+        }
+    }
+
+    $CheckedLocations.Value = @($checked)
+    return $null
+}
+
+# ------------------------------------------------------------------------------
+# 6. Helper: Enable "Provision this application for all users on the device" (SDK)
 # ------------------------------------------------------------------------------
 function Set-CMAppxProvisionForAllUsers {
     [CmdletBinding(SupportsShouldProcess = $true)]
@@ -435,26 +541,22 @@ function Set-CMAppxProvisionForAllUsers {
     )
 
     # 1. Locate and load required ConfigMgr Admin Console SDK assemblies
-    $binCandidates = @(
-        $env:SMS_ADMIN_UI_PATH,
-        "C:\Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin",
-        "C:\Program Files (x86)\Microsoft Endpoint Manager\AdminConsole\bin",
-        "C:\Program Files\Microsoft Configuration Manager\AdminConsole\bin"
-    )
-
-    $binDir = $null
-    foreach ($cand in $binCandidates) {
-        if (-not [string]::IsNullOrWhiteSpace($cand) -and (Test-Path $cand)) {
-            $dir = if (Test-Path $cand -PathType Container) { $cand } else { Split-Path $cand -Parent }
-            if (Test-Path (Join-Path $dir 'Microsoft.ConfigurationManagement.ApplicationManagement.dll')) {
-                $binDir = $dir
-                break
-            }
-        }
-    }
+    $checkedSdkLocations = @()
+    $binDir = Resolve-ConfigMgrAdminConsoleBin -ExplicitPath $AdminConsolePath -CheckedLocations ([ref]$checkedSdkLocations)
 
     if (-not $binDir) {
-        Write-Warning "Could not locate ConfigMgr Admin Console SDK assemblies in standard paths."
+        $checkedText = if ($checkedSdkLocations.Count) { $checkedSdkLocations -join "`n  - " } else { '(none)' }
+        Write-Warning @"
+Could not locate the installed ConfigMgr Admin Console SDK assemblies.
+Required assemblies:
+  - Microsoft.ConfigurationManagement.ApplicationManagement.dll
+  - Microsoft.ConfigurationManagement.ApplicationManagement.Win8Installer.dll
+Locations checked:
+  - $checkedText
+Specify the installed Admin Console bin directory explicitly, for example:
+  -AdminConsolePath "D:\Program Files\Microsoft Configuration Manager\AdminConsole\bin"
+Setup, staging, payload, backup, CD.Latest, and SMSSETUP directories are intentionally not accepted.
+"@
         return $false
     }
 
@@ -511,7 +613,7 @@ function Set-CMAppxProvisionForAllUsers {
 }
 
 # ------------------------------------------------------------------------------
-# 6. Helper: Extract icon PNG from an MSIX/AppX package
+# 7. Helper: Extract icon PNG from an MSIX/AppX package
 # ------------------------------------------------------------------------------
 function Get-AppxPackageIcon {
     <#
