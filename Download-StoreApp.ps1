@@ -13,6 +13,9 @@
          SHA-256 file digest.
       5. Download .appx / .appxbundle / .msix / .msixbundle (+ dependencies).
 
+.NOTES
+    Release v2.1 - no functional change in this release.
+
 .PARAMETER Id
     A Store product link, a 12-char ProductId (e.g. 9WZDNCRFJBMP), or a
     PackageFamilyName. Examples:

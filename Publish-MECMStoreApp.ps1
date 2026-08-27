@@ -13,7 +13,17 @@
     Supports processing single or multiple downloaded applications in batch.
 
 .NOTES
-    Release v2.0
+    Release v2.1
+
+    v2.1 - Version upgrades are no longer silent.
+      Applications are named by package identity with no version, so a newer
+      build matches the application created from the older one. Previously the
+      publisher printed "Reusing" in green and changed nothing: content landed
+      on the share while the deployment type still pointed at the old package,
+      so devices kept receiving the OLD version with no indication anything was
+      outstanding. It now compares the staged version against the published
+      SoftwareVersion, and either updates in place with -UpdateExisting or
+      reports the mismatch and repeats it in an ACTION REQUIRED summary.
 
 .PARAMETER PackagePath
     Local or UNC directory containing downloaded app packages. If omitted, the
@@ -46,6 +56,12 @@
 
 .PARAMETER Arch
     Target architecture filter: x64 (default), all, arm64, x86.
+
+.PARAMETER UpdateExisting
+    When the application already exists at a DIFFERENT version, update its
+    deployment type content location and SoftwareVersion in place instead of
+    reporting the mismatch and leaving MECM untouched. Redistribute content
+    afterwards so distribution points serve the new package.
 
 .PARAMETER DistributeContent
     Switch to automatically distribute the created applications and group to
@@ -92,6 +108,13 @@ param(
     [string]$Arch = 'x64',
 
     [switch]$DistributeContent,
+
+    # Applications are named by package identity with no version, so re-running
+    # after downloading a newer build matches the application created from the
+    # OLD one. Without this switch the version difference is reported loudly and
+    # nothing is changed; with it, the deployment type's content location and the
+    # application's SoftwareVersion are updated in place.
+    [switch]$UpdateExisting,
 
     [string]$DPGroupName,
 
@@ -958,6 +981,11 @@ if ($PSCmdlet.ShouldProcess("MECM Site", "Connect and create applications")) {
 # 7. Process Each Selected Application Package Folder
 # ------------------------------------------------------------------------------
 $summaryResults = @()
+# Script scope, NOT per-app-folder: a version mismatch found while processing the
+# first application must still be reported after the last one. Reset these inside
+# the loop and only the final folder's findings would reach the summary.
+$updatedAppNames = @()
+$staleAppNames = @()
 $appFolderIndex = 1
 
 foreach ($appFolder in $selectedAppFolders) {
@@ -1102,7 +1130,51 @@ foreach ($appFolder in $selectedAppFolders) {
             if ($targetApp) {
                 $existingDT = Get-CMDeploymentType -ApplicationName $appName -ErrorAction SilentlyContinue
                 if ($existingDT) {
-                    Write-Host "  Application '$appName' already exists in MECM with deployment type. Reusing." -ForegroundColor Green
+                    # Applications are named by package identity with NO version, so a
+                    # newer build matches the application created from the OLD one.
+                    # Staging the new content to the share does not tell MECM about it:
+                    # the deployment type still points at the previous package. Saying
+                    # "Reusing" in green there reports a success that did not happen -
+                    # the operator has no way to know a manual console step is now
+                    # required, and the fresh content on disk makes it look done.
+                    $publishedVersion = [string]$targetApp.SoftwareVersion
+                    $stagedVersion    = [string]$pkg.Identity.Version
+
+                    if ($publishedVersion -and $stagedVersion -and $publishedVersion -ne $stagedVersion) {
+                        if ($UpdateExisting) {
+                            Write-Host "  Version change detected for '$appName': $publishedVersion -> $stagedVersion" -ForegroundColor Yellow
+                            try {
+                                $dtName = [string]$existingDT.LocalizedDisplayName
+                                if ([string]::IsNullOrWhiteSpace($dtName)) { $dtName = "$appName - Native AppX" }
+
+                                Set-CMWindowsAppxDeploymentType -ApplicationName $appName `
+                                                               -DeploymentTypeName $dtName `
+                                                               -ContentLocation $pkgFileLocation `
+                                                               -Force `
+                                                               -ErrorAction Stop
+                                Set-CMApplication -Name $appName -SoftwareVersion $stagedVersion -ErrorAction Stop
+
+                                Write-Host "  [UPDATED] Deployment type content -> $pkgFileLocation" -ForegroundColor Green
+                                Write-Host "  [UPDATED] SoftwareVersion -> $stagedVersion" -ForegroundColor Green
+                                Write-Host "  NOTE: redistribute content for this application so DPs serve the new package." -ForegroundColor Yellow
+                                $updatedAppNames += $appName
+                            } catch {
+                                Write-Host "  [ERROR] Could not update '$appName': $($_.Exception.Message)" -ForegroundColor Red
+                                Write-Host "          The application still points at $publishedVersion. Update it in the console." -ForegroundColor Red
+                                $staleAppNames += [pscustomobject]@{ Name = $appName; Published = $publishedVersion; Staged = $stagedVersion }
+                            }
+                        } else {
+                            Write-Host "  [WARN] '$appName' is published as $publishedVersion but $stagedVersion was just staged." -ForegroundColor Yellow
+                            Write-Host "         MECM was NOT updated. The deployment type still points at $publishedVersion," -ForegroundColor Yellow
+                            Write-Host "         so devices continue to receive the OLD package." -ForegroundColor Yellow
+                            Write-Host "         Re-run with -UpdateExisting, or in the console either update the deployment" -ForegroundColor Yellow
+                            Write-Host "         type's content location and Update Content, or create a new application" -ForegroundColor Yellow
+                            Write-Host "         version and use Supersedence." -ForegroundColor Yellow
+                            $staleAppNames += [pscustomobject]@{ Name = $appName; Published = $publishedVersion; Staged = $stagedVersion }
+                        }
+                    } else {
+                        Write-Host "  Application '$appName' already exists at $stagedVersion. Reusing." -ForegroundColor Green
+                    }
                 } else {
                     Write-Host "  Application '$appName' exists but is missing deployment type. Adding Deployment Type..." -ForegroundColor Yellow
                     try {
@@ -1124,7 +1196,7 @@ foreach ($appFolder in $selectedAppFolders) {
                 $targetApp = New-CMApplication -Name $appName `
                                                -Publisher "Microsoft" `
                                                -SoftwareVersion $pkg.Identity.Version `
-                                               -Description "[WindowsStoreOfflineToolkit:v2] Offline Windows Store Package ($($pkg.Identity.Architecture))"
+                                               -Description "[WindowsStoreOfflineToolkit:v2.1] Offline Windows Store Package ($($pkg.Identity.Architecture))"
 
                 Write-Host "  Creating native Windows app package Deployment Type..." -ForegroundColor Yellow
                 
@@ -1189,7 +1261,7 @@ foreach ($appFolder in $selectedAppFolders) {
             }
             $targetGroup = New-CMApplicationGroup -Name $currentAppGroupName `
                                                   -AddApplication $createdAppNames `
-                                                  -Description "[WindowsStoreOfflineToolkit:v2] Offline deployment group for $mainAppName and required dependencies" `
+                                                  -Description "[WindowsStoreOfflineToolkit:v2.1] Offline deployment group for $mainAppName and required dependencies" `
                                                   -SoftwareVersion $mainAppVersion
         } else {
             $targetGroup = $existingGroup
@@ -1273,4 +1345,30 @@ Write-Host "                 EXECUTION SUMMARY                        " -Foregro
 Write-Host "==========================================================" -ForegroundColor Green
 $summaryResults | Format-Table -AutoSize
 
-Write-Host "All applications processed and provisioned successfully." -ForegroundColor Green
+if ($updatedAppNames.Count -gt 0) {
+    Write-Host "Applications updated to a new version ($($updatedAppNames.Count)):" -ForegroundColor Cyan
+    foreach ($n in ($updatedAppNames | Select-Object -Unique)) { Write-Host "  $n" -ForegroundColor Green }
+    Write-Host "  Redistribute content for these so distribution points serve the new package." -ForegroundColor Yellow
+    Write-Host ""
+}
+
+# Repeated here deliberately. A mismatch reported only at the point it was found
+# scrolls away on a multi-application run, and the operator walks off believing
+# the new build shipped.
+if ($staleAppNames.Count -gt 0) {
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host " ACTION REQUIRED - NEWER PACKAGES STAGED BUT NOT PUBLISHED" -ForegroundColor Yellow
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host " Content is on the share, but MECM still points at the older package," -ForegroundColor Yellow
+    Write-Host " so devices continue to receive the OLD version:" -ForegroundColor Yellow
+    Write-Host ""
+    foreach ($s in $staleAppNames) {
+        Write-Host ("  {0,-42} published {1}  ->  staged {2}" -f $s.Name, $s.Published, $s.Staged) -ForegroundColor White
+    }
+    Write-Host ""
+    Write-Host " Re-run with -UpdateExisting, or fix each in the console." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Completed with actions outstanding - see above." -ForegroundColor Yellow
+} else {
+    Write-Host "All applications processed and provisioned successfully." -ForegroundColor Green
+}

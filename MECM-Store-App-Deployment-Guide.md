@@ -269,7 +269,19 @@ MECM then installs those frameworks before the app whenever it deploys - even ou
 
 ## Updating to a new version
 
-When a new build ships, re-run `Download-StoreApp.ps1` for the app. The downloader caches by file size, so it fetches only the new packages and places them in a new version subfolder (e.g. `…\Windows Terminal\<new version>\`). Existing versions are left untouched. From MECM you then either:
+When a new build ships, re-run `Download-StoreApp.ps1` for the app. The downloader caches by file size, so it fetches only the new packages and places them in a new version subfolder (e.g. `…\Windows Terminal\<new version>\`). Existing versions are left untouched.
+
+Then re-run the publisher with `-UpdateExisting`:
+
+```powershell
+.\Publish-MECMStoreApp.ps1 -PackagePath '…\Windows Terminal\<new version>' -ContentShare '\\server\share' -UpdateExisting
+```
+
+It updates the deployment type's content location and the application's `SoftwareVersion` in place, then tells you to redistribute content so distribution points serve the new package.
+
+> **Applications are named by package identity with no version** (`Microsoft.WindowsTerminal`, not `Microsoft.WindowsTerminal 1.24.x`). A newer build therefore matches the application created from the older one. **Without `-UpdateExisting` the publisher does not change MECM** - it reports the version difference and lists the affected applications again in an `ACTION REQUIRED` block at the end of the run, because content landing on the share while MECM still points at the old package means devices keep receiving the OLD version.
+
+Doing it by hand in the console instead, either:
 
 - Update the existing application's deployment type **content location** to point at the new version folder, then **Update Content** and redistribute; or
 - Create a **new application version** for the new package and use **Supersedence** to replace the old one. This gives a cleaner audit trail and supports phased replacement.
@@ -311,7 +323,7 @@ Deploying the group as **Uninstall**, or removing each application, reverses the
 
 For test-environment object cleanup, `Remove-MECMStoreApp.ps1` only selects
 applications and Application Groups carrying the toolkit description marker
-`[WindowsStoreOfflineToolkit:v2]`. Exact descriptions written by the earlier
+`[WindowsStoreOfflineToolkit:v2.1]`, matched by a pattern accepting any dotted version so earlier objects stay recognised. Exact descriptions written by the earlier
 release are retained as a compatibility path. Application names, partial name
 matches, and generic AppX/MSIX deployment types are not sufficient ownership
 evidence; for example, an unrelated `Notepad++` application is excluded.

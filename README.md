@@ -4,6 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%20Windows%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![MECM / SCCM](https://img.shields.io/badge/Deployment-MECM%20%2F%20SCCM%20%7C%20Intune-238636.svg)](https://learn.microsoft.com/mem/configmgr/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-v2.1-blueviolet.svg)](CHANGELOG.md)
 
 A production-ready PowerShell toolset to download, stage, and deploy Microsoft Store app packages (`.msixbundle`, `.appxbundle`, `.msix`, `.appx`) **and their required framework dependencies** directly from Microsoft's Windows Update / FE3 delivery servers.
 
@@ -158,7 +159,7 @@ Pick a number (blank to skip): 1
 
 > [!TIP]
 > **Which result to pick?**
-> - Results are sorted by relevance and popularity—**`[1]` is almost always the official primary app**.
+> - Results are sorted by relevance and popularity - **`[1]` is almost always the official primary app**.
 > - Look at the 12-character **ProductId** in parentheses (e.g. `9N0DX20HK701`). You can verify this against the Microsoft Store URL: `https://apps.microsoft.com/detail/9N0DX20HK701`.
 > - **Skip search entirely**: If you already have the ProductId or Store URL, pass it directly with `-Id` to bypass interactive prompts:
 >   ```powershell
@@ -184,6 +185,23 @@ powershell -ExecutionPolicy Bypass -File .\Publish-MECMStoreApp.ps1 `
     -ContentShare "\\CM1\Software\Microsoft\Windows Store Apps" `
     -DistributeContent -DPGroupName "All DPs"
 
+
+# Publish a NEWER build of an app that already exists in MECM:
+powershell -ExecutionPolicy Bypass -File .\Publish-MECMStoreApp.ps1 `
+    -PackagePath ".\StoreDownloads\Windows Terminal\<new version>" `
+    -ContentShare "\\CM1\Software\Microsoft\Windows Store Apps" -UpdateExisting
+```
+
+> [!WARNING]
+> **Upgrades are not automatic without `-UpdateExisting`.** Applications are named by package identity with no version (`Microsoft.WindowsTerminal`, not `Microsoft.WindowsTerminal 1.24.x`), so a newer build matches the application created from the older one. The publisher stages the new content to the share, but **MECM keeps pointing at the previous package**, so devices continue to receive the OLD version.
+>
+> The publisher compares the staged version against the application's published `SoftwareVersion` and:
+> - with `-UpdateExisting`, updates the deployment type's content location and the `SoftwareVersion` in place, then reminds you to redistribute content;
+> - without it, reports the difference and lists every affected application again in an **ACTION REQUIRED** block at the end of the run, because a warning printed mid-run scrolls away on a multi-application publish.
+>
+> Releases before v2.1 printed `Reusing` in green here and changed nothing, with no indication that a manual console step was outstanding.
+
+```powershell
 # Preview actions without making changes (Dry Run):
 powershell -ExecutionPolicy Bypass -File .\Publish-MECMStoreApp.ps1 -All -WhatIf
 ```
@@ -221,7 +239,7 @@ StoreDownloads\
 2. **Transfer**: Copy the resulting package folders into your disconnected environment.
 3. **Deploy via MECM**:
    - **Recommended (Automated)**: Run [`Publish-MECMStoreApp.ps1`](Publish-MECMStoreApp.ps1) to stage UNC content, create applications with device-wide provisioning, and build the sequenced **Application Group**.
-   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to delete toolkit-owned Application Groups, Applications, Console Folders, and staged packages. Current objects carry a `[WindowsStoreOfflineToolkit:v2]` description marker; the remover also recognizes the exact legacy descriptions created by earlier releases. Names alone are never treated as proof of ownership.
+   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to delete toolkit-owned Application Groups, Applications, Console Folders, and staged packages. Current objects carry a `[WindowsStoreOfflineToolkit:v2.1]` description marker (the remover matches any dotted version, so objects from earlier releases are still recognised); the remover also recognizes the exact legacy descriptions created by earlier releases. Names alone are never treated as proof of ownership.
 
 > [!CAUTION]
 > **Removal confirmation and shared frameworks**: When an application or Application Group is selected, the remover discovers its associated frameworks, labels each one **EXCLUSIVE** or **SHARED**, lists any non-selected consumers, and asks whether eligible frameworks should also be deleted. The final plan separates groups, applications, and frameworks and requires the operator to type `REMOVE` exactly unless `-WhatIf` or the explicit unattended `-Force` switch is used. Target applications with `-AppName`; target frameworks with `-FrameworkName` or interactive `FW1`, `FW2`, and similar selectors. Shared frameworks are excluded by default; `-RemoveSharedFrameworks` is the explicit high-risk override.

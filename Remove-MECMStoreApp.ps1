@@ -3,6 +3,15 @@
     Cleans up and removes MECM/SCCM Store Applications, Application Groups,
     Console Folders, and staged content for testing and environment resets.
 
+.NOTES
+    Release v2.1
+
+    v2.1 - The toolkit ownership marker now accepts dotted versions (v2, v2.1).
+      The previous 'v\d+' pattern matched v2 but NOT v2.1, so the moment the
+      publisher stamped a minor version this remover would stop recognising its
+      own objects. Ownership is proven by that marker and never by name, so the
+      result would have been a silent refusal to clean anything.
+
 .DESCRIPTION
     This utility script automates the complete cleanup of MECM Store Application
     testing artifacts. It safely removes:
@@ -181,7 +190,12 @@ $allGroups = @(Get-CMApplicationGroup -ErrorAction SilentlyContinue)
 $allApps = @(Get-CMApplication -ErrorAction SilentlyContinue)
 
 $frameworkKeywords = @('VCLibs', 'UI.Xaml', 'NET.Native', 'WindowsAppRuntime', 'WinAppRuntime')
-$toolkitMarkerPattern = '^\[WindowsStoreOfflineToolkit:v\d+\]\s+'
+# Accepts dotted versions (v2, v2.1, v10.3). The original '\d+' matched v2 but
+# NOT v2.1, so the moment the publisher stamped a minor version this remover
+# would stop recognising its own objects and silently refuse to clean anything -
+# ownership is proven by this marker, never by name. Deliberately permissive so
+# it keeps matching objects created by every earlier release.
+$toolkitMarkerPattern = '^\[WindowsStoreOfflineToolkit:v[\d.]+\]\s+'
 
 function Get-CMObjectDescription {
     param([object]$InputObject)
@@ -321,7 +335,7 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0) -and
             return
         }
         Write-Host "Proceeding to console folder cleanup..." -ForegroundColor Cyan
-        # Skip interactive menu — no apps to select; fall through to folder cleanup below
+        # Skip interactive menu - no apps to select; fall through to folder cleanup below
     } else {
         Write-Host "`nDiscovered MECM Store Items:" -ForegroundColor Yellow
         Write-Host "--- Application Groups ---" -ForegroundColor Cyan
@@ -357,7 +371,7 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0) -and
         } elseif ($trimmed -match '^(g|groups)$') {
             $selectedGroupsToRemove = $discoveredGroups
         } elseif ($trimmed -match '^(f|folders)$') {
-            # Folder cleanup only — nothing to add to selected lists
+            # Folder cleanup only - nothing to add to selected lists
         } else {
             $parts = $trimmed -split '[,\s]+'
             foreach ($p in $parts) {
@@ -385,7 +399,7 @@ if (-not $All -and (-not $AppName -or $AppName.Count -eq 0) -and
                 }
             }
         }
-    } # end else (apps/groups were found — interactive menu complete)
+    } # end else (apps/groups were found - interactive menu complete)
 } elseif ($All) {
     $selectedAppsToRemove = $discoveredStoreApps
     $selectedGroupsToRemove = $discoveredGroups
@@ -674,7 +688,7 @@ if (-not $KeepFolders) {
         try {
             $allNodes = @(Get-CimInstance -Namespace $wmiNamespace -ClassName SMS_ObjectContainerNode -Filter "ObjectType = $ObjectType" -ErrorAction SilentlyContinue)
 
-            # Match root folder by name — support both 'Windows Store Apps' and 'Windows Store Applications' variants
+            # Match root folder by name - support both 'Windows Store Apps' and 'Windows Store Applications' variants
             $rootNode = $allNodes | Where-Object { $_.ParentContainerNodeID -eq 0 -and $_.Name -like "*$RootFolderName*" } | Select-Object -First 1
             if (-not $rootNode) { return }
 
@@ -708,7 +722,7 @@ if (-not $KeepFolders) {
                 if ($items.Count -eq 0 -and $subNodes.Count -eq 0) {
                     if ($PSCmdlet.ShouldProcess("$($n.Name) (ID: $nodeId)", "Delete empty console folder")) {
                         try {
-                            # Use [int] cast — Remove-CMFolder -Id parameter is typed [int]
+                            # Use [int] cast - Remove-CMFolder -Id parameter is typed [int]
                             $nodeIdInt = [int]$nodeId
                             $fObj = Get-CMFolder -Id $nodeIdInt -ErrorAction SilentlyContinue
                             if ($fObj) {

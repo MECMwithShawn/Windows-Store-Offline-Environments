@@ -195,7 +195,7 @@ content. It declares `ConfirmImpact = High`, supports `ShouldProcess`, and
 provides `-WhatIf`; `-Force` bypasses prompts.
 
 Removal eligibility is based on an explicit
-`[WindowsStoreOfflineToolkit:v2]` description marker. Exact legacy descriptions
+`[WindowsStoreOfflineToolkit:v2.1]` description marker, matched by a pattern that accepts any dotted version so objects from earlier releases stay recognised. Exact legacy descriptions
 written by the previous publisher remain supported for compatibility. Names,
 partial-name searches, and generic AppX/MSIX deployment types are not ownership
 evidence, and `-AppName` searches only within this bounded inventory.
@@ -408,7 +408,7 @@ end-user content.
 
 ## 12. Findings and Required Actions
 
-### IA-01 — Downloaded package integrity is not cryptographically verified
+### IA-01 - Downloaded package integrity is not cryptographically verified
 
 **Severity:** HIGH
 
@@ -433,7 +433,7 @@ the encoding is correctly interpreted, validates the package signature and
 certificate chain, and checks the publisher against an allowlist. Treat any
 validation failure as fatal.
 
-### IA-02 — Destructive content cleanup has a broad share-wide mode
+### IA-02 - Destructive content cleanup has a broad share-wide mode
 
 **Severity:** HIGH
 
@@ -457,7 +457,7 @@ shares; enumerate the exact candidate paths; require a second explicit switch
 for share-wide cleanup; and document tested restoration procedures. Use a
 dedicated share or dedicated subdirectory with independent backups.
 
-### IA-03 — Content URL allowlisting is pattern-based and permits `http*`
+### IA-03 - Content URL allowlisting is pattern-based and permits `http*`
 
 **Severity:** MEDIUM
 
@@ -478,7 +478,7 @@ compare the normalized host to exact approved hosts or a dot-boundary Microsoft
 suffix; reject userinfo, non-default ports, malformed URIs, and redirects to
 unapproved hosts.
 
-### IA-04 — Equal-size files are trusted as valid cache/staging matches
+### IA-04 - Equal-size files are trusted as valid cache/staging matches
 
 **Severity:** MEDIUM
 
@@ -496,7 +496,7 @@ being detected by these scripts.
 persist a transfer manifest containing relative path, size, digest, publisher,
 and signing status.
 
-### IA-05 — Operational logging is console-only and not tamper-evident
+### IA-05 - Operational logging is console-only and not tamper-evident
 
 **Severity:** MEDIUM
 
@@ -516,7 +516,7 @@ operator identity, host, script/commit version, parameters with sensitive query
 data removed, target paths/object IDs, hashes, validation outcomes, and results.
 Forward or archive logs under organizational retention controls.
 
-### IA-06 — Repository scripts are unsigned and guidance uses execution-policy bypass
+### IA-06 - Repository scripts are unsigned and guidance uses execution-policy bypass
 
 **Severity:** MEDIUM
 
@@ -535,7 +535,7 @@ PKI, deploy the issuing chain, enforce an appropriate PowerShell policy, enable
 Script Block Logging and Module Logging, and replace bypass examples in the
 production runbook.
 
-### IA-07 — Temporary icon/executable artifacts are not centrally cleaned
+### IA-07 - Temporary icon/executable artifacts are not centrally cleaned
 
 **Severity:** LOW
 
@@ -553,7 +553,7 @@ and may be consumed by a later run.
 **Required action:** Use a unique per-run temporary directory, validate the
 resolved path remains under that directory, and delete it in a `finally` block.
 
-### IA-08 — Default `Everyone: Read` share access may exceed local policy
+### IA-08 - Default `Everyone: Read` share access may exceed local policy
 
 **Severity:** MEDIUM
 
@@ -576,7 +576,7 @@ replace it with an organization-managed MECM/DP reader group. Maintain
 least-privilege NTFS ACLs and verify effective access from representative
 administrative, site-server, DP, and unauthorized accounts.
 
-### IA-09 — Name-based removal selected an unrelated Notepad++ application
+### IA-09 - Name-based removal selected an unrelated Notepad++ application
 
 **Severity:** HIGH
 
