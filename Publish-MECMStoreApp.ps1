@@ -314,7 +314,7 @@ if (-not $selectedAppFolders -or $selectedAppFolders.Count -eq 0) {
 }
 
 # ------------------------------------------------------------------------------
-# 3. Prompt for ContentShare with Auto-Default (\\SERVER\Software\Microsoft\Windows Store Apps)
+# 3. Prompt for ContentShare with Auto-Default
 # ------------------------------------------------------------------------------
 $serverName = if (-not [string]::IsNullOrWhiteSpace($SiteServer) -and $SiteServer -ne 'localhost') {
     $SiteServer
@@ -322,7 +322,53 @@ $serverName = if (-not [string]::IsNullOrWhiteSpace($SiteServer) -and $SiteServe
     $env:COMPUTERNAME
 }
 
-$defaultShare = "\\$serverName\Software\Microsoft\Windows Store Apps"
+$localNames = @('.', 'localhost', $env:COMPUTERNAME)
+if ($env:COMPUTERNAME) { $localNames += "$($env:COMPUTERNAME).$env:USERDNSDOMAIN" }
+$isLocal = $localNames -contains $serverName
+
+# Smart discovery of target UNC content share:
+# Checks for existing 'Software' share or standard MECM shares (Packages$, Sources$, etc.)
+$discoveredDefaultShare = $null
+try {
+    $availableShares = if ($isLocal) {
+        @(Get-SmbShare -ErrorAction SilentlyContinue)
+    } else {
+        @(Get-SmbShare -CimSession $serverName -ErrorAction SilentlyContinue)
+    }
+
+    # 1. Existing Software share
+    $soft = $availableShares | Where-Object { $_.Name -ieq 'Software' } | Select-Object -First 1
+    if ($soft) {
+        $discoveredDefaultShare = "\\$serverName\$($soft.Name)\Microsoft\Windows Store Apps"
+    }
+
+    # 2. Existing MECM / SCCM package shares
+    if (-not $discoveredDefaultShare) {
+        $candidateShareNames = @('Packages$', 'Packages', 'Sources$', 'Sources', 'Applications$', 'Applications', 'Apps$', 'Apps')
+        foreach ($cName in $candidateShareNames) {
+            $matchedShare = $availableShares | Where-Object { $_.Name -ieq $cName } | Select-Object -First 1
+            if ($matchedShare) {
+                $baseUnc = "\\$serverName\$($matchedShare.Name)"
+                if (Test-Path -LiteralPath "$baseUnc\Sources\Applications") {
+                    $discoveredDefaultShare = "$baseUnc\Sources\Applications\Microsoft\Windows Store Apps"
+                    break
+                } elseif (Test-Path -LiteralPath "$baseUnc\Applications") {
+                    $discoveredDefaultShare = "$baseUnc\Applications\Microsoft\Windows Store Apps"
+                    break
+                } elseif (Test-Path -LiteralPath $baseUnc) {
+                    $discoveredDefaultShare = "$baseUnc\Microsoft\Windows Store Apps"
+                    break
+                }
+            }
+        }
+    }
+} catch { }
+
+if (-not $discoveredDefaultShare) {
+    $discoveredDefaultShare = "\\$serverName\Software\Microsoft\Windows Store Apps"
+}
+
+$defaultShare = $discoveredDefaultShare
 
 if ([string]::IsNullOrWhiteSpace($ContentShare)) {
     if (-not [Console]::IsInputRedirected) {
@@ -837,6 +883,59 @@ function Confirm-ContentSharePermissions {
             $shareParams.CimSession = $cimSession
         }
 
+        # Check if SMB share exists
+        $existingShare = $null
+        try {
+            $existingShare = Get-SmbShare @shareParams
+        } catch {
+            $existingShare = $null
+        }
+
+        if (-not $existingShare) {
+            $isAdmin = $false
+            try {
+                $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            } catch { }
+
+            $localPath = if ($isLocalShare) {
+                "$env:SystemDrive\$shareName"
+            } else {
+                "C:\$shareName"
+            }
+
+            if ($WhatIfPreference) {
+                $null = $PSCmdlet.ShouldProcess("\\$serverName\$shareName", "Create missing SMB share at '$localPath' with required permissions")
+                return $true
+            }
+
+            if ($isAdmin -and (Get-Command New-SmbShare -ErrorAction SilentlyContinue)) {
+                if ($PSCmdlet.ShouldProcess("\\$serverName\$shareName", "Create missing SMB share at '$localPath'")) {
+                    Write-Host "SMB share '\\$serverName\$shareName' does not exist. Creating it automatically..." -ForegroundColor Cyan
+                    if ($isLocalShare -and -not (Test-Path -LiteralPath $localPath)) {
+                        $null = New-Item -ItemType Directory -Path $localPath -Force
+                    }
+                    $newParams = @{
+                        Name        = $shareName
+                        Path        = $localPath
+                        FullAccess  = 'BUILTIN\Administrators'
+                        ReadAccess  = 'Everyone'
+                        ErrorAction = 'Stop'
+                    }
+                    if ($cimSession) { $newParams.CimSession = $cimSession }
+                    $null = New-SmbShare @newParams
+                    Write-Host "SMB share successfully created: \\$serverName\$shareName -> $localPath" -ForegroundColor Green
+                    return $true
+                }
+            } else {
+                if (Test-Path -LiteralPath $Path) {
+                    Write-Warning "SMB share '\\$serverName\$shareName' could not be enumerated via SMB cmdlets, but path '$Path' is accessible via filesystem."
+                    return $true
+                }
+                Write-Warning "SMB share '\\$serverName\$shareName' does not exist. Automated share creation requires elevated Administrator privileges."
+                return $false
+            }
+        }
+
         $currentAccess = @(Get-SmbShareAccess @shareParams)
         $requiredAccess = @(
             [pscustomobject]@{ AccountName = 'Everyone'; MinimumRight = 'Read' },
@@ -844,7 +943,15 @@ function Confirm-ContentSharePermissions {
         )
         $missingAccess = @()
 
+        # Check if Everyone already has Full or Change access (which covers BUILTIN\Administrators)
+        $everyoneEntry = $currentAccess | Where-Object { $_.AccountName -ieq 'Everyone' -and $_.AccessControlType -eq 'Allow' } | Select-Object -First 1
+        $everyoneHasChangeOrFull = $everyoneEntry -and ("$($everyoneEntry.AccessRight)" -match '^(Change|Full)$')
+
         foreach ($required in $requiredAccess) {
+            if ($required.AccountName -ieq 'BUILTIN\Administrators' -and $everyoneHasChangeOrFull) {
+                continue
+            }
+
             $matchingEntries = @($currentAccess | Where-Object { $_.AccountName -ieq $required.AccountName })
             $denyEntry = $matchingEntries | Where-Object { $_.AccessControlType -eq 'Deny' } | Select-Object -First 1
             if ($denyEntry) {
@@ -854,7 +961,7 @@ function Confirm-ContentSharePermissions {
 
             $allowedRights = if ($required.MinimumRight -eq 'Read') { @('Read', 'Change', 'Full') } else { @('Change', 'Full') }
             $hasRequiredAccess = $matchingEntries | Where-Object {
-                $_.AccessControlType -eq 'Allow' -and $allowedRights -contains $_.AccessRight.ToString()
+                $_.AccessControlType -eq 'Allow' -and ($allowedRights -contains $_.AccessRight.ToString() -or "$($_.AccessRight)" -in $allowedRights)
             } | Select-Object -First 1
             if (-not $hasRequiredAccess) { $missingAccess += $required }
         }
@@ -872,29 +979,36 @@ function Confirm-ContentSharePermissions {
             return $true
         }
 
-        if ([Console]::IsInputRedirected -or -not $PSCmdlet.ShouldContinue(
-            "The following required share permissions are missing on '\\$serverName\$shareName':`n$missingText`n`nGrant the missing permissions now?",
-            'Repair SMB share permissions')) {
-            Write-Warning "Required SMB share permissions were not repaired. Run:`nGrant-SmbShareAccess -Name `"$shareName`" -AccountName `"Everyone`" -AccessRight Read -Force`nGrant-SmbShareAccess -Name `"$shareName`" -AccountName `"BUILTIN\Administrators`" -AccessRight Change -Force"
-            return $false
-        }
+        Write-Host "Automatically repairing required SMB share permissions on '\\$serverName\$shareName':" -ForegroundColor Yellow
+        Write-Host $missingText -ForegroundColor Yellow
 
+        $repairedAll = $true
         foreach ($entry in $missingAccess) {
             if ($PSCmdlet.ShouldProcess("\\$serverName\$shareName", "Grant $($entry.AccountName) $($entry.MinimumRight) share access")) {
-                $grantParams = @{
-                    Name        = $shareName
-                    AccountName = $entry.AccountName
-                    AccessRight = $entry.MinimumRight
-                    Force       = $true
-                    ErrorAction = 'Stop'
+                try {
+                    $grantParams = @{
+                        Name        = $shareName
+                        AccountName = $entry.AccountName
+                        AccessRight = $entry.MinimumRight
+                        Force       = $true
+                        ErrorAction = 'Stop'
+                    }
+                    if ($cimSession) { $grantParams.CimSession = $cimSession }
+                    Grant-SmbShareAccess @grantParams | Out-Null
+                    Write-Host "  Successfully granted $($entry.AccountName) $($entry.MinimumRight) share access." -ForegroundColor Green
+                } catch {
+                    Write-Warning "Failed to grant $($entry.AccountName) access: $($_.Exception.Message)"
+                    $repairedAll = $false
                 }
-                if ($cimSession) { $grantParams.CimSession = $cimSession }
-                Grant-SmbShareAccess @grantParams | Out-Null
             }
         }
 
-        Write-Host "SMB share permissions repaired: \\$serverName\$shareName" -ForegroundColor Green
-        return $true
+        if ($repairedAll) {
+            Write-Host "SMB share permissions repaired: \\$serverName\$shareName" -ForegroundColor Green
+            return $true
+        } else {
+            return $false
+        }
     } catch {
         Write-Warning "Could not validate or repair SMB share permissions for '\\$serverName\$shareName': $($_.Exception.Message)"
         return $false

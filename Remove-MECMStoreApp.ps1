@@ -768,7 +768,49 @@ if ($RemoveStagedContent) {
         $env:COMPUTERNAME
     }
 
-    $defaultShare = "\\$serverName\Software\Microsoft\Windows Store Apps"
+    $localNames = @('.', 'localhost', $env:COMPUTERNAME)
+    if ($env:COMPUTERNAME) { $localNames += "$($env:COMPUTERNAME).$env:USERDNSDOMAIN" }
+    $isLocal = $localNames -contains $serverName
+
+    $discoveredDefaultShare = $null
+    try {
+        $availableShares = if ($isLocal) {
+            @(Get-SmbShare -ErrorAction SilentlyContinue)
+        } else {
+            @(Get-SmbShare -CimSession $serverName -ErrorAction SilentlyContinue)
+        }
+
+        $soft = $availableShares | Where-Object { $_.Name -ieq 'Software' } | Select-Object -First 1
+        if ($soft) {
+            $discoveredDefaultShare = "\\$serverName\$($soft.Name)\Microsoft\Windows Store Apps"
+        }
+
+        if (-not $discoveredDefaultShare) {
+            $candidateShareNames = @('Packages$', 'Packages', 'Sources$', 'Sources', 'Applications$', 'Applications', 'Apps$', 'Apps')
+            foreach ($cName in $candidateShareNames) {
+                $matchedShare = $availableShares | Where-Object { $_.Name -ieq $cName } | Select-Object -First 1
+                if ($matchedShare) {
+                    $baseUnc = "\\$serverName\$($matchedShare.Name)"
+                    if (Test-Path -LiteralPath "$baseUnc\Sources\Applications") {
+                        $discoveredDefaultShare = "$baseUnc\Sources\Applications\Microsoft\Windows Store Apps"
+                        break
+                    } elseif (Test-Path -LiteralPath "$baseUnc\Applications") {
+                        $discoveredDefaultShare = "$baseUnc\Applications\Microsoft\Windows Store Apps"
+                        break
+                    } elseif (Test-Path -LiteralPath $baseUnc) {
+                        $discoveredDefaultShare = "$baseUnc\Microsoft\Windows Store Apps"
+                        break
+                    }
+                }
+            }
+        }
+    } catch { }
+
+    if (-not $discoveredDefaultShare) {
+        $discoveredDefaultShare = "\\$serverName\Software\Microsoft\Windows Store Apps"
+    }
+
+    $defaultShare = $discoveredDefaultShare
     $targetShare = if (-not [string]::IsNullOrWhiteSpace($ContentShare)) { $ContentShare } else { $defaultShare }
 
     Write-Host "  Target UNC Share: $targetShare" -ForegroundColor Cyan
