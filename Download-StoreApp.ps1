@@ -14,7 +14,9 @@
       5. Download .appx / .appxbundle / .msix / .msixbundle (+ dependencies).
 
 .NOTES
-    Release v2.1 - no functional change in this release.
+    Release v2.2 - App Installer (winget) can be found by name: "winget", "App Installer"
+      or a dotted package name such as Microsoft.DesktopAppInstaller is resolved by an
+      alias table, then a PackageFamilyName lookup, then Store search as before.
 
 .PARAMETER Id
     A Store product link, a 12-char ProductId (e.g. 9WZDNCRFJBMP), or a

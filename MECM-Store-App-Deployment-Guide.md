@@ -344,7 +344,7 @@ Deploying the group as **Uninstall**, or removing each application, reverses the
 
 For test-environment object cleanup, `Remove-MECMStoreApp.ps1` only selects
 applications and Application Groups carrying the toolkit description marker
-`[WindowsStoreOfflineToolkit:v2.1]`, matched by a pattern accepting any dotted version so earlier objects stay recognised. Exact descriptions written by the earlier
+`[WindowsStoreOfflineToolkit:v2.2]`, matched by a pattern accepting any dotted version so earlier objects stay recognised. Exact descriptions written by the earlier
 release are retained as a compatibility path. Application names, partial name
 matches, and generic AppX/MSIX deployment types are not sufficient ownership
 evidence; for example, an unrelated `Notepad++` application is excluded.

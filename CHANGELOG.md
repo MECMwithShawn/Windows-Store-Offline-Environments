@@ -4,7 +4,7 @@ All notable changes to the Windows Store Offline Environments toolkit.
 
 ---
 
-## Unreleased
+## v2.2
 
 ### App Installer / winget can be downloaded by name
 

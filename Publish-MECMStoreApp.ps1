@@ -13,7 +13,16 @@
     Supports processing single or multiple downloaded applications in batch.
 
 .NOTES
-    Release v2.1
+    Release v2.2
+
+    v2.2 - Framework applications detect "this version or newer".
+      Framework applications (VCLibs, .NET Native, UI.Xaml, WindowsAppRuntime)
+      are created with one PowerShell deployment type that is compliant when the
+      staged version or newer is provisioned for all users, instead of the native
+      AppX deployment type and its exact-version detection. A device that already
+      had a newer framework failed the native type with 0x800700B7 and stopped the
+      Application Group. -UpdateExisting converts an existing framework
+      application; -FrameworkExactVersionOnly keeps the v2.1 behaviour.
 
     v2.1 - Version upgrades are no longer silent.
       Applications are named by package identity with no version, so a newer
@@ -1448,7 +1457,7 @@ foreach ($appFolder in $selectedAppFolders) {
                 $targetApp = New-CMApplication -Name $appName `
                                                -Publisher "Microsoft" `
                                                -SoftwareVersion $pkg.Identity.Version `
-                                               -Description "[WindowsStoreOfflineToolkit:v2.1] Offline Windows Store Package ($($pkg.Identity.Architecture))"
+                                               -Description "[WindowsStoreOfflineToolkit:v2.2] Offline Windows Store Package ($($pkg.Identity.Architecture))"
 
                 if ($frameworkDtSpec) {
                     Write-Host "  Creating 'version or newer' script Deployment Type (framework)..." -ForegroundColor Yellow
@@ -1530,7 +1539,7 @@ foreach ($appFolder in $selectedAppFolders) {
             }
             $targetGroup = New-CMApplicationGroup -Name $currentAppGroupName `
                                                   -AddApplication $createdAppNames `
-                                                  -Description "[WindowsStoreOfflineToolkit:v2.1] Offline deployment group for $mainAppName and required dependencies" `
+                                                  -Description "[WindowsStoreOfflineToolkit:v2.2] Offline deployment group for $mainAppName and required dependencies" `
                                                   -SoftwareVersion $mainAppVersion
         } else {
             $targetGroup = $existingGroup

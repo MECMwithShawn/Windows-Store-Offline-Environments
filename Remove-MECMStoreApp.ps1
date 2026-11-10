@@ -4,7 +4,7 @@
     Console Folders, and staged content for testing and environment resets.
 
 .NOTES
-    Release v2.1
+    Release v2.2 - no functional change in this release.
 
     v2.1 - The toolkit ownership marker now accepts dotted versions (v2, v2.1).
       The previous 'v\d+' pattern matched v2 but NOT v2.1, so the moment the

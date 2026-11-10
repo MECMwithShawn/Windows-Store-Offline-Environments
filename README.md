@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%20Windows%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![MECM / SCCM](https://img.shields.io/badge/Deployment-MECM%20%2F%20SCCM%20%7C%20Intune-238636.svg)](https://learn.microsoft.com/mem/configmgr/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v2.1-blueviolet.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-v2.2-blueviolet.svg)](CHANGELOG.md)
 
 A production-ready PowerShell toolset to download, stage, and deploy Microsoft Store app packages (`.msixbundle`, `.appxbundle`, `.msix`, `.appx`) **and their required framework dependencies** directly from Microsoft's Windows Update / FE3 delivery servers.
 

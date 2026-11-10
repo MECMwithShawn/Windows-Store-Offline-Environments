@@ -195,7 +195,7 @@ content. It declares `ConfirmImpact = High`, supports `ShouldProcess`, and
 provides `-WhatIf`; `-Force` bypasses prompts.
 
 Removal eligibility is based on an explicit
-`[WindowsStoreOfflineToolkit:v2.1]` description marker, matched by a pattern that accepts any dotted version so objects from earlier releases stay recognised. Exact legacy descriptions
+`[WindowsStoreOfflineToolkit:v2.2]` description marker, matched by a pattern that accepts any dotted version so objects from earlier releases stay recognised. Exact legacy descriptions
 written by the previous publisher remain supported for compatibility. Names,
 partial-name searches, and generic AppX/MSIX deployment types are not ownership
 evidence, and `-AppName` searches only within this bounded inventory.
