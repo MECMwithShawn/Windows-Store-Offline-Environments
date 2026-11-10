@@ -4,6 +4,47 @@ All notable changes to the Windows Store Offline Environments toolkit.
 
 ---
 
+## Unreleased
+
+### App Installer / winget can be downloaded by name
+
+`Download-StoreApp.ps1`
+
+App Installer (ProductId `9NBLGGH4NNS1`, the package that ships winget) is not
+returned by Store search, so `-Id winget` and `-Id Microsoft.DesktopAppInstaller`
+ended in "No Store matches". Name input is now resolved in this order: a small
+alias table (`winget`, `App Installer`), then a DisplayCatalog lookup of a dotted
+package name as `<Name>_8wekyb3d8bbwe`, then Store search as before.
+
+### Framework applications detect "this version or newer"
+
+`Publish-MECMStoreApp.ps1`
+
+The native AppX deployment type detects the exact package version. A device
+that already had a newer framework provisioned (for example UI.Xaml 2.8
+8.2511.26001.0 when MECM publishes 8.2501.31001.0) was evaluated NotInstalled;
+MECM then tried to provision the older package, Windows refused it with
+`0x800700B7`, and the Application Group stopped at that member, so the main app
+was never evaluated.
+
+Framework applications (VCLibs, .NET Native, UI.Xaml, WindowsAppRuntime) now get
+a second, priority-1 deployment type, `<App> - Script (version or newer)`:
+
+- Detection: compliant only when that package name and architecture is
+  provisioned for all users (`Get-AppxProvisionedPackage -Online`) at the staged
+  version or newer. Per-user or SYSTEM-staged copies do not count.
+- Install: `Add-AppxProvisionedPackage -Online -PackagePath .\<file> -SkipLicense`,
+  as System, from the same content folder as the native deployment type.
+
+The native AppX deployment type is unchanged and stays at priority 2. The script
+deployment type is added when an application is created, when its first
+deployment type is created, and is re-pointed with `-UpdateExisting`. An
+existing, unchanged application is left as it is and the run prints a notice.
+`-FrameworkExactVersionOnly` restores the v2.1 behaviour. `-WhatIf` prints each
+generated deployment type, including its detection script.
+
+---
+
 ## v2.1
 
 Two defects, both of the same kind: an operation that reported success while

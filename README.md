@@ -267,6 +267,7 @@ StoreDownloads\
 |---|---|
 | `… is not digitally signed` | Run `Get-ChildItem -Recurse \| Unblock-File` or launch with `powershell -ExecutionPolicy Bypass -File …`. |
 | `Could not resolve a ProductId from '<name>'` | The input was treated as a literal id. Run with no `-Id` and search by name, or pass the 12-char ProductId directly. |
+| `No Store matches for 'winget'` (or another Microsoft package name) | Some products, such as App Installer (which ships winget), are hidden from Store search. The script maps `winget` / `App Installer` to ProductId `9NBLGGH4NNS1` and tries dotted package names such as `Microsoft.DesktopAppInstaller` as a Microsoft PackageFamilyName before searching. For other hidden apps, pass the ProductId or full PackageFamilyName (`Name_publisherId`). |
 | `Resolved 0 downloadable packages for arch 'x64'` | The app may only ship a 32-bit or neutral package. Try `-Arch all`. |
 | `Connection timed out / failed to respond` | Transient CDN issue. `Download-StoreApp.ps1` will retry automatically up to 3 times with backoff. |
 | `No WuCategoryId found …` | The product is not delivered through Store update services (e.g. paid Win32 listings). |

@@ -256,6 +256,23 @@ Most setups use both: deployment-type dependencies to model "this app needs thes
 
 ---
 
+## Framework detection: this version or newer
+
+A native AppX deployment type detects the **exact** package version. If a device already has a **newer** framework provisioned, MECM reports the framework NotInstalled, tries to provision the older package, and Windows refuses it with `0x800700B7`. Inside an Application Group that failure stops the group before the main app is evaluated.
+
+The publisher therefore gives every framework application a second deployment type, `<App> - Script (version or newer)`, at **priority 1**. The native AppX deployment type stays at priority 2.
+
+| | Script (version or newer) |
+|---|---|
+| Detection | PowerShell: compliant only when the package name + architecture is **provisioned** (`Get-AppxProvisionedPackage -Online`) at the staged version or newer. Per-user registrations and SYSTEM-staged copies (`Get-AppxPackage -AllUsers`) do not count. |
+| Install | `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-AppxProvisionedPackage -Online -PackagePath '.\<file>' -SkipLicense \| Out-Null"`, run as System from the same content folder. |
+
+The script deployment type is created with new applications and re-pointed by `-UpdateExisting`. Existing applications that are reused unchanged keep their deployment types; the run prints a notice for each framework that still has exact-version detection only. Preview the generated detection scripts with `-WhatIf`; use `-FrameworkExactVersionOnly` to create only the native deployment type.
+
+Validate before rolling wider: run the detection script on representative devices, and test the install command as SYSTEM on a device where the framework is missing.
+
+---
+
 ## Optional: deployment type dependencies
 
 For stricter, app-level enforcement (independent of group order), you can declare dependencies directly on a main app's deployment type:

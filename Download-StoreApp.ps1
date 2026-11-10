@@ -333,6 +333,29 @@ function Search-StoreApp {
     }
 }
 
+# Products the Store name search does not return. App Installer (which ships
+# winget) is hidden from both the msstore manifest search and Store search.
+$KnownStoreApps = @{
+    'winget'                        = '9NBLGGH4NNS1'
+    'winget-cli'                    = '9NBLGGH4NNS1'
+    'app installer'                 = '9NBLGGH4NNS1'
+    'appinstaller'                  = '9NBLGGH4NNS1'
+    'desktopappinstaller'           = '9NBLGGH4NNS1'
+}
+
+# A bare package name (e.g. Microsoft.DesktopAppInstaller) is not searchable,
+# but Microsoft-published packages resolve by PackageFamilyName with the
+# Microsoft publisher id. Returns the PFN when the catalog knows it, else $null.
+function Resolve-MicrosoftPackageName {
+    param([string]$Name)
+    if ($Name -notmatch '^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$') { return $null }
+    $pfn = "${Name}_8wekyb3d8bbwe"
+    $uri = "https://displaycatalog.mp.microsoft.com/v7.0/products/lookup?market=US&languages=en-US&value=$pfn&alternateId=PackageFamilyName&fieldsTemplate=details"
+    try { $r = Invoke-RestMethod -Uri $uri -UseBasicParsing } catch { return $null }
+    if ($r -and $r.Products -and @($r.Products).Count -gt 0) { return $pfn }
+    return $null
+}
+
 function Invoke-AppDownload {
     param([string]$Id)
     Write-Host "Resolving '$Id' ..." -ForegroundColor Cyan
@@ -554,6 +577,19 @@ if (-not $targets) { Write-Host "No apps specified." -ForegroundColor Yellow; re
 foreach ($t in $targets) {
     $resolved = $t
     $isDirect = ($t -match '^https?://') -or ($t -match '^[0-9A-Za-z]{12,}$') -or ($t -match '_')
+    if (-not $isDirect) {
+        $alias = $KnownStoreApps[$t.ToLowerInvariant()]
+        if ($alias) {
+            $resolved = $alias
+            $isDirect = $true
+        } else {
+            $pfnHit = Resolve-MicrosoftPackageName -Name $t
+            if ($pfnHit) {
+                $resolved = $pfnHit
+                $isDirect = $true
+            }
+        }
+    }
     if (-not $isDirect) {
         try { $hits = @(Search-StoreApp -Term $t) }
         catch { Write-Warning "Search failed for '$t': $($_.Exception.Message)"; continue }
