@@ -27,21 +27,30 @@ MECM then tried to provision the older package, Windows refused it with
 `0x800700B7`, and the Application Group stopped at that member, so the main app
 was never evaluated.
 
-Framework applications (VCLibs, .NET Native, UI.Xaml, WindowsAppRuntime) now get
-a second, priority-1 deployment type, `<App> - Script (version or newer)`:
+Framework applications (VCLibs, .NET Native, UI.Xaml, WindowsAppRuntime) are now
+created with a single PowerShell deployment type,
+`<App> - Script (version or newer)`, instead of the native AppX one:
 
 - Detection: compliant only when that package name and architecture is
   provisioned for all users (`Get-AppxProvisionedPackage -Online`) at the staged
   version or newer. Per-user or SYSTEM-staged copies do not count.
 - Install: `Add-AppxProvisionedPackage -Online -PackagePath .\<file> -SkipLicense`,
-  as System, from the same content folder as the native deployment type.
+  as System, from the package's content folder.
 
-The native AppX deployment type is unchanged and stays at priority 2. The script
-deployment type is added when an application is created, when its first
-deployment type is created, and is re-pointed with `-UpdateExisting`. An
+Framework applications are script-only on purpose. MECM treats an application as
+present when any of its deployment types detects it, and the native AppX type
+detects the exact version registered for any single user. Kept next to the
+script type it reported the framework Installed (application `NotUpdated`,
+requirement `CompliancePartial`) on a device with nothing provisioned, and MECM
+never ran the install.
+
+The script deployment type is created with a new application and when an
+application has no deployment type. `-UpdateExisting` re-points it (or adds it)
+and removes a native AppX deployment type from that framework application. An
 existing, unchanged application is left as it is and the run prints a notice.
-`-FrameworkExactVersionOnly` restores the v2.1 behaviour. `-WhatIf` prints each
-generated deployment type, including its detection script.
+`-FrameworkExactVersionOnly` restores the v2.1 behaviour (native AppX,
+exact-version detection). `-WhatIf` prints each generated deployment type,
+including its detection script. Main applications are unchanged.
 
 ---
 

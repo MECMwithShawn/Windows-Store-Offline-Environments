@@ -121,10 +121,12 @@ param(
     [string]$ConsoleRootFolder = 'Windows Store Applications',
 
     # Framework applications (VCLibs, UI.Xaml, WindowsAppRuntime, .NET Native)
-    # get a priority-1 PowerShell deployment type whose detection accepts the
-    # staged version OR NEWER, provisioned for all users. The native AppX
-    # deployment type is kept at priority 2. Use this switch to create only the
-    # native AppX deployment type (exact-version detection), as in v2.1.
+    # get ONE PowerShell deployment type whose detection accepts the staged
+    # version OR NEWER, provisioned for all users, and no native AppX deployment
+    # type (MECM treats an application as present when ANY deployment type
+    # detects it, so a native one would override that detection). Use this switch
+    # to create the native AppX deployment type instead (exact-version
+    # detection), as in v2.1.
     [switch]$FrameworkExactVersionOnly
 )
 
@@ -706,6 +708,14 @@ Setup, staging, payload, backup, CD.Latest, and SMSSETUP directories are intenti
 # Detection deliberately looks only at Get-AppxProvisionedPackage. A per-user
 # registration or a SYSTEM-staged copy (Get-AppxPackage -AllUsers) is not what
 # the install command produces and does not prove new profiles are covered.
+#
+# The framework application carries ONLY this deployment type. MECM treats an
+# application as present when ANY of its deployment types detects it, and the
+# native AppX type detects the exact version registered for any single user.
+# Kept alongside, it reports the framework Installed (application NotUpdated,
+# requirement CompliancePartial) on a device where nothing is provisioned, so
+# the install below never runs; after -UpdateExisting it would also keep
+# detecting the OLD version.
 function Get-FrameworkMinVersionDeploymentTypeSpec {
     param(
         [Parameter(Mandatory = $true)][string]$AppName,
@@ -753,7 +763,7 @@ function Set-FrameworkMinVersionDeploymentType {
             Write-Host "  [UPDATED] '$($Spec.DeploymentTypeName)'" -ForegroundColor Green
         }
     } else {
-        if ($PSCmdlet.ShouldProcess($ApplicationName, "Add '$($Spec.DeploymentTypeName)' at priority 1")) {
+        if ($PSCmdlet.ShouldProcess($ApplicationName, "Add '$($Spec.DeploymentTypeName)'")) {
             $null = Add-CMScriptDeploymentType -ApplicationName $ApplicationName -DeploymentTypeName $Spec.DeploymentTypeName `
                 -ContentLocation $Spec.ContentLocation -InstallCommand $Spec.InstallCommand `
                 -ScriptLanguage PowerShell -ScriptText $Spec.DetectionScript `
@@ -763,14 +773,16 @@ function Set-FrameworkMinVersionDeploymentType {
         }
     }
 
-    # Keep the script deployment type at priority 1 so MECM evaluates it before
-    # the native AppX deployment type, which stays as the priority-2 fallback.
-    if (-not $WhatIfPreference) {
-        $dtCount = @(Get-CMDeploymentType -ApplicationName $ApplicationName).Count
-        for ($i = 1; $i -lt $dtCount; $i++) {
-            $first = ([xml](Get-CMApplication -Name $ApplicationName).SDMPackageXML).AppMgmtDigest.DeploymentType | Select-Object -First 1
-            if ($first.Title.'#text' -eq $Spec.DeploymentTypeName) { break }
-            Set-CMDeploymentType -ApplicationName $ApplicationName -DeploymentTypeName $Spec.DeploymentTypeName -Priority Increase -ErrorAction Stop
+    # Script-only: remove any native AppX deployment type (see the note above).
+    # Done after the script deployment type exists, so the application is never
+    # left without one.
+    $nativeDTs = @(Get-CMDeploymentType -ApplicationName $ApplicationName -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Technology -eq 'Windows8App' })
+    foreach ($dt in $nativeDTs) {
+        $nativeName = [string]$dt.LocalizedDisplayName
+        if ($PSCmdlet.ShouldProcess($ApplicationName, "Remove native AppX deployment type '$nativeName' (its exact-version detection would override the minimum-version detection)")) {
+            Remove-CMDeploymentType -ApplicationName $ApplicationName -DeploymentTypeName $nativeName -Force -ErrorAction Stop
+            Write-Host "  Removed '$nativeName' (framework apps are script-only)." -ForegroundColor Yellow
         }
     }
 }
@@ -1333,9 +1345,9 @@ foreach ($appFolder in $selectedAppFolders) {
                 -Architecture $pkg.Identity.Architecture -PackageFileName $pkg.File.Name `
                 -ContentFolder $staged.ContentLocation
         }
-        # Set only where this run creates or re-points the application. A reused,
-        # unchanged application keeps its existing deployment types.
-        $applyFrameworkDt = $false
+        # True once this run has created or re-pointed the framework's script
+        # deployment type. A reused, unchanged application keeps what it has.
+        $frameworkDtDone = $false
 
         if ($mecmConnected) {
             Write-Host "`nProcessing Application: $appName" -ForegroundColor Cyan
@@ -1358,24 +1370,28 @@ foreach ($appFolder in $selectedAppFolders) {
                         if ($UpdateExisting) {
                             Write-Host "  Version change detected for '$appName': $publishedVersion -> $stagedVersion" -ForegroundColor Yellow
                             try {
-                                # With a framework script DT present, Get-CMDeploymentType returns
-                                # several; the native AppX one is the one Set-CMWindowsAppxDeploymentType updates.
-                                $nativeDT = @($existingDT | Where-Object { $_.Technology -eq 'Windows8App' -or $_.LocalizedDisplayName -like '* - Native AppX' }) | Select-Object -First 1
-                                $dtName = if ($nativeDT) { [string]$nativeDT.LocalizedDisplayName } else { [string](@($existingDT)[0].LocalizedDisplayName) }
-                                if ([string]::IsNullOrWhiteSpace($dtName)) { $dtName = "$appName - Native AppX" }
+                                if ($frameworkDtSpec) {
+                                    # Framework: re-point (or add) the script deployment type and
+                                    # drop any native AppX one, which would keep detecting $publishedVersion.
+                                    Set-FrameworkMinVersionDeploymentType -ApplicationName $appName -Spec $frameworkDtSpec
+                                    $frameworkDtDone = $true
+                                } else {
+                                    $nativeDT = @($existingDT | Where-Object { $_.Technology -eq 'Windows8App' -or $_.LocalizedDisplayName -like '* - Native AppX' }) | Select-Object -First 1
+                                    $dtName = if ($nativeDT) { [string]$nativeDT.LocalizedDisplayName } else { [string](@($existingDT)[0].LocalizedDisplayName) }
+                                    if ([string]::IsNullOrWhiteSpace($dtName)) { $dtName = "$appName - Native AppX" }
 
-                                Set-CMWindowsAppxDeploymentType -ApplicationName $appName `
-                                                               -DeploymentTypeName $dtName `
-                                                               -ContentLocation $pkgFileLocation `
-                                                               -Force `
-                                                               -ErrorAction Stop
+                                    Set-CMWindowsAppxDeploymentType -ApplicationName $appName `
+                                                                   -DeploymentTypeName $dtName `
+                                                                   -ContentLocation $pkgFileLocation `
+                                                                   -Force `
+                                                                   -ErrorAction Stop
+                                }
                                 Set-CMApplication -Name $appName -SoftwareVersion $stagedVersion -ErrorAction Stop
 
                                 Write-Host "  [UPDATED] Deployment type content -> $pkgFileLocation" -ForegroundColor Green
                                 Write-Host "  [UPDATED] SoftwareVersion -> $stagedVersion" -ForegroundColor Green
                                 Write-Host "  NOTE: redistribute content for this application so DPs serve the new package." -ForegroundColor Yellow
                                 $updatedAppNames += $appName
-                                $applyFrameworkDt = $true
                             } catch {
                                 Write-Host "  [ERROR] Could not update '$appName': $($_.Exception.Message)" -ForegroundColor Red
                                 Write-Host "          The application still points at $publishedVersion. Update it in the console." -ForegroundColor Red
@@ -1392,14 +1408,55 @@ foreach ($appFolder in $selectedAppFolders) {
                         }
                     } else {
                         Write-Host "  Application '$appName' already exists at $stagedVersion. Reusing." -ForegroundColor Green
-                        if ($frameworkDtSpec -and -not (@($existingDT) | Where-Object { $_.LocalizedDisplayName -eq $frameworkDtSpec.DeploymentTypeName })) {
-                            Write-Host "  NOTE: this existing framework app has only exact-version detection and was left unchanged." -ForegroundColor Yellow
-                            Write-Host "        Devices with a newer version provisioned will fail it with 0x800700B7." -ForegroundColor Yellow
-                            Write-Host "        Add '$($frameworkDtSpec.DeploymentTypeName)' manually (see the guide) after validating it." -ForegroundColor Yellow
+                        if ($frameworkDtSpec) {
+                            $hasScriptDT = [bool](@($existingDT) | Where-Object { $_.LocalizedDisplayName -eq $frameworkDtSpec.DeploymentTypeName })
+                            $hasNativeDT = [bool](@($existingDT) | Where-Object { $_.Technology -eq 'Windows8App' })
+                            if (-not $hasScriptDT) {
+                                Write-Host "  NOTE: this existing framework app has only exact-version detection and was left unchanged." -ForegroundColor Yellow
+                                Write-Host "        Devices with a newer version provisioned will fail it with 0x800700B7." -ForegroundColor Yellow
+                                Write-Host "        Replace its deployment type with '$($frameworkDtSpec.DeploymentTypeName)' (see the guide)." -ForegroundColor Yellow
+                            } elseif ($hasNativeDT) {
+                                Write-Host "  NOTE: this framework app still has a native AppX deployment type next to the script one." -ForegroundColor Yellow
+                                Write-Host "        MECM accepts either, so a per-user copy of the exact version counts as installed." -ForegroundColor Yellow
+                                Write-Host "        Remove the native AppX deployment type to make minimum-version detection effective." -ForegroundColor Yellow
+                            }
                         }
                     }
                 } else {
                     Write-Host "  Application '$appName' exists but is missing deployment type. Adding Deployment Type..." -ForegroundColor Yellow
+                    if ($frameworkDtSpec) {
+                        Set-FrameworkMinVersionDeploymentType -ApplicationName $appName -Spec $frameworkDtSpec
+                        $frameworkDtDone = $true
+                    } else {
+                        try {
+                            $null = Add-CMAppxDeploymentType -ApplicationName $appName `
+                                                             -ContentLocation $pkgFileLocation `
+                                                             -DeploymentTypeName "$appName - Native AppX" `
+                                                             -LogonRequirementType WhetherOrNotUserLoggedOn `
+                                                             -ErrorAction Stop
+                        } catch {
+                            $null = Add-CMAppxDeploymentType -ApplicationName $appName `
+                                                             -ContentLocation $pkgFileLocation `
+                                                             -DeploymentTypeName "$appName - Native AppX" `
+                                                             -ErrorAction Stop
+                        }
+                    }
+                    Write-Host "  Deployment type created successfully." -ForegroundColor Green
+                }
+            } else {
+                Write-Host "  Creating new Application: $appName" -ForegroundColor Yellow
+                $targetApp = New-CMApplication -Name $appName `
+                                               -Publisher "Microsoft" `
+                                               -SoftwareVersion $pkg.Identity.Version `
+                                               -Description "[WindowsStoreOfflineToolkit:v2.1] Offline Windows Store Package ($($pkg.Identity.Architecture))"
+
+                if ($frameworkDtSpec) {
+                    Write-Host "  Creating 'version or newer' script Deployment Type (framework)..." -ForegroundColor Yellow
+                    Set-FrameworkMinVersionDeploymentType -ApplicationName $appName -Spec $frameworkDtSpec
+                    $frameworkDtDone = $true
+                } else {
+                    Write-Host "  Creating native Windows app package Deployment Type..." -ForegroundColor Yellow
+
                     try {
                         $null = Add-CMAppxDeploymentType -ApplicationName $appName `
                                                          -ContentLocation $pkgFileLocation `
@@ -1412,45 +1469,14 @@ foreach ($appFolder in $selectedAppFolders) {
                                                          -DeploymentTypeName "$appName - Native AppX" `
                                                          -ErrorAction Stop
                     }
-                    Write-Host "  Deployment type created successfully." -ForegroundColor Green
-                    $applyFrameworkDt = $true
                 }
-            } else {
-                Write-Host "  Creating new Application: $appName" -ForegroundColor Yellow
-                $targetApp = New-CMApplication -Name $appName `
-                                               -Publisher "Microsoft" `
-                                               -SoftwareVersion $pkg.Identity.Version `
-                                               -Description "[WindowsStoreOfflineToolkit:v2.1] Offline Windows Store Package ($($pkg.Identity.Architecture))"
-
-                Write-Host "  Creating native Windows app package Deployment Type..." -ForegroundColor Yellow
-                
-                try {
-                    $null = Add-CMAppxDeploymentType -ApplicationName $appName `
-                                                     -ContentLocation $pkgFileLocation `
-                                                     -DeploymentTypeName "$appName - Native AppX" `
-                                                     -LogonRequirementType WhetherOrNotUserLoggedOn `
-                                                     -ErrorAction Stop
-                } catch {
-                    $null = Add-CMAppxDeploymentType -ApplicationName $appName `
-                                                     -ContentLocation $pkgFileLocation `
-                                                     -DeploymentTypeName "$appName - Native AppX" `
-                                                     -ErrorAction Stop
-                }
-                $applyFrameworkDt = $true
             }
 
-            # Enable "Provision this application for all users on the device" (SDK)
-            $null = Set-CMAppxProvisionForAllUsers -ApplicationName $appName
-
-            # Frameworks: priority-1 "version or newer" script DT, native AppX stays priority 2
-            if ($frameworkDtSpec -and $applyFrameworkDt) {
-                try {
-                    Set-FrameworkMinVersionDeploymentType -ApplicationName $appName -Spec $frameworkDtSpec
-                } catch {
-                    Write-Host "  [ERROR] Could not configure '$($frameworkDtSpec.DeploymentTypeName)': $($_.Exception.Message)" -ForegroundColor Red
-                    Write-Host "          '$appName' keeps exact-version detection only." -ForegroundColor Red
-                    $staleAppNames += [pscustomobject]@{ Name = "$appName (min-version DT)"; Published = 'exact only'; Staged = $pkg.Identity.Version }
-                }
+            # Enable "Provision this application for all users on the device" (SDK).
+            # Applies to native AppX deployment types; a framework's script
+            # deployment type already installs as System and provisions for all users.
+            if (-not $frameworkDtDone) {
+                $null = Set-CMAppxProvisionForAllUsers -ApplicationName $appName
             }
 
             # Set Application icon from the package's embedded logo
@@ -1478,7 +1504,7 @@ foreach ($appFolder in $selectedAppFolders) {
             Write-Host "[WhatIf] Would create Application: '$appName' (Content: '$pkgFileLocation') with Provision for All Users." -ForegroundColor Yellow
             Write-Host "[WhatIf] Would organize into Console Folder: 'Application\$($appFolderHierarchy -join '\')'" -ForegroundColor DarkGray
             if ($frameworkDtSpec) {
-                Write-Host "[WhatIf] Would add priority-1 DT '$($frameworkDtSpec.DeploymentTypeName)' (native AppX stays priority 2):" -ForegroundColor Yellow
+                Write-Host "[WhatIf] Framework: its only deployment type would be '$($frameworkDtSpec.DeploymentTypeName)' (no native AppX):" -ForegroundColor Yellow
                 Write-Host "           Content : $($frameworkDtSpec.ContentLocation)" -ForegroundColor DarkGray
                 Write-Host "           Install : $($frameworkDtSpec.InstallCommand)" -ForegroundColor DarkGray
                 Write-Host "           Detect  :" -ForegroundColor DarkGray

@@ -260,16 +260,20 @@ Most setups use both: deployment-type dependencies to model "this app needs thes
 
 A native AppX deployment type detects the **exact** package version. If a device already has a **newer** framework provisioned, MECM reports the framework NotInstalled, tries to provision the older package, and Windows refuses it with `0x800700B7`. Inside an Application Group that failure stops the group before the main app is evaluated.
 
-The publisher therefore gives every framework application a second deployment type, `<App> - Script (version or newer)`, at **priority 1**. The native AppX deployment type stays at priority 2.
+The publisher therefore creates every framework application with **one** deployment type, `<App> - Script (version or newer)`, and **no native AppX deployment type**. Main applications keep the native AppX deployment type.
 
 | | Script (version or newer) |
 |---|---|
 | Detection | PowerShell: compliant only when the package name + architecture is **provisioned** (`Get-AppxProvisionedPackage -Online`) at the staged version or newer. Per-user registrations and SYSTEM-staged copies (`Get-AppxPackage -AllUsers`) do not count. |
 | Install | `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-AppxProvisionedPackage -Online -PackagePath '.\<file>' -SkipLicense \| Out-Null"`, run as System from the same content folder. |
 
-The script deployment type is created with new applications and re-pointed by `-UpdateExisting`. Existing applications that are reused unchanged keep their deployment types; the run prints a notice for each framework that still has exact-version detection only. Preview the generated detection scripts with `-WhatIf`; use `-FrameworkExactVersionOnly` to create only the native deployment type.
+> **Do not keep a native AppX deployment type next to it.** MECM treats an application as present when **any** of its deployment types detects it, and the native type detects the exact version registered for any single user. With both present, a device where the framework is not provisioned shows the script type `NotInstalled`, the native type `Installed`, the application `NotUpdated` and the requirement `CompliancePartial` - and MECM never runs the install. A second deployment type is also not a fallback: MECM enforces one deployment type and does not try another when it fails.
 
-Validate before rolling wider: run the detection script on representative devices, and test the install command as SYSTEM on a device where the framework is missing.
+The script deployment type is created with new applications. `-UpdateExisting` re-points it (or adds it) and removes the native AppX deployment type from that framework application. Existing applications that are reused unchanged keep their deployment types; the run prints a notice for each framework that still has exact-version detection, or that has both types. Preview the generated detection scripts with `-WhatIf`; use `-FrameworkExactVersionOnly` to create the native deployment type instead.
+
+To convert an existing framework application by hand: add the script deployment type (same content folder, the install command and detection script above), remove the native AppX deployment type, then update content on the distribution points.
+
+Validate before rolling wider: run the detection script on representative devices, then remove the provisioned copy on one test device (`Remove-AppxProvisionedPackage -Online -PackageName <full name>`) and confirm in `AppEnforce.log` that MECM runs the install and it exits 0. Clients need the client setting **Computer Agent > PowerShell execution policy = Bypass** for the unsigned detection script.
 
 ---
 
