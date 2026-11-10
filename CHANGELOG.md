@@ -4,6 +4,56 @@ All notable changes to the Windows Store Offline Environments toolkit.
 
 ---
 
+## Unreleased
+
+### App Installer / winget can be downloaded by name
+
+`Download-StoreApp.ps1`
+
+App Installer (ProductId `9NBLGGH4NNS1`, the package that ships winget) is not
+returned by Store search, so `-Id winget` and `-Id Microsoft.DesktopAppInstaller`
+ended in "No Store matches". Name input is now resolved in this order: a small
+alias table (`winget`, `App Installer`), then a DisplayCatalog lookup of a dotted
+package name as `<Name>_8wekyb3d8bbwe`, then Store search as before.
+
+### Framework applications detect "this version or newer"
+
+`Publish-MECMStoreApp.ps1`
+
+The native AppX deployment type detects the exact package version. A device
+that already had a newer framework provisioned (for example UI.Xaml 2.8
+8.2511.26001.0 when MECM publishes 8.2501.31001.0) was evaluated NotInstalled;
+MECM then tried to provision the older package, Windows refused it with
+`0x800700B7`, and the Application Group stopped at that member, so the main app
+was never evaluated.
+
+Framework applications (VCLibs, .NET Native, UI.Xaml, WindowsAppRuntime) are now
+created with a single PowerShell deployment type,
+`<App> - Script (version or newer)`, instead of the native AppX one:
+
+- Detection: compliant only when that package name and architecture is
+  provisioned for all users (`Get-AppxProvisionedPackage -Online`) at the staged
+  version or newer. Per-user or SYSTEM-staged copies do not count.
+- Install: `Add-AppxProvisionedPackage -Online -PackagePath .\<file> -SkipLicense`,
+  as System, from the package's content folder.
+
+Framework applications are script-only on purpose. MECM treats an application as
+present when any of its deployment types detects it, and the native AppX type
+detects the exact version registered for any single user. Kept next to the
+script type it reported the framework Installed (application `NotUpdated`,
+requirement `CompliancePartial`) on a device with nothing provisioned, and MECM
+never ran the install.
+
+The script deployment type is created with a new application and when an
+application has no deployment type. `-UpdateExisting` re-points it (or adds it)
+and removes a native AppX deployment type from that framework application. An
+existing, unchanged application is left as it is and the run prints a notice.
+`-FrameworkExactVersionOnly` restores the v2.1 behaviour (native AppX,
+exact-version detection). `-WhatIf` prints each generated deployment type,
+including its detection script. Main applications are unchanged.
+
+---
+
 ## v2.1
 
 Two defects, both of the same kind: an operation that reported success while
