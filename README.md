@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%20Windows%2011-0078D6.svg)](https://www.microsoft.com/windows)
 [![MECM / SCCM](https://img.shields.io/badge/Deployment-MECM%20%2F%20SCCM%20%7C%20Intune-238636.svg)](https://learn.microsoft.com/mem/configmgr/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v2.2-blueviolet.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-v2.3-blueviolet.svg)](CHANGELOG.md)
 
 A production-ready PowerShell toolset to download, stage, and deploy Microsoft Store app packages (`.msixbundle`, `.appxbundle`, `.msix`, `.appx`) **and their required framework dependencies** directly from Microsoft's Windows Update / FE3 delivery servers.
 
@@ -241,7 +241,7 @@ StoreDownloads\
 2. **Transfer**: Copy the resulting package folders into your disconnected environment.
 3. **Deploy via MECM**:
    - **Recommended (Automated)**: Run [`Publish-MECMStoreApp.ps1`](Publish-MECMStoreApp.ps1) to stage UNC content, create applications with device-wide provisioning, and build the sequenced **Application Group**.
-   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to delete toolkit-owned Application Groups, Applications, Console Folders, and staged packages. Current objects carry a `[WindowsStoreOfflineToolkit:v2.1]` description marker (the remover matches any dotted version, so objects from earlier releases are still recognised); the remover also recognizes the exact legacy descriptions created by earlier releases. Names alone are never treated as proof of ownership.
+   - **Testing Cleanup**: Use [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) during testing to delete toolkit-owned Application Groups, Applications, Console Folders, and staged packages. Current objects carry a `[WindowsStoreOfflineToolkit:v2.2]` description marker (the remover matches any dotted version, so objects from earlier releases are still recognised); the remover also recognizes the exact legacy descriptions created by earlier releases. Names alone are never treated as proof of ownership.
 
 > [!CAUTION]
 > **Removal confirmation and shared frameworks**: When an application or Application Group is selected, the remover discovers its associated frameworks, labels each one **EXCLUSIVE** or **SHARED**, lists any non-selected consumers, and asks whether eligible frameworks should also be deleted. The final plan separates groups, applications, and frameworks and requires the operator to type `REMOVE` exactly unless `-WhatIf` or the explicit unattended `-Force` switch is used. Target applications with `-AppName`; target frameworks with `-FrameworkName` or interactive `FW1`, `FW2`, and similar selectors. Shared frameworks are excluded by default; `-RemoveSharedFrameworks` is the explicit high-risk override.

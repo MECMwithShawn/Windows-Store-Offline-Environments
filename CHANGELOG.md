@@ -4,9 +4,13 @@ All notable changes to the Windows Store Offline Environments toolkit.
 
 ---
 
-## Unreleased (after v2.2)
+## v2.3
 
 ### Client-side removal scripts for MECM Run Scripts
+
+No change to `Download-StoreApp.ps1`, `Publish-MECMStoreApp.ps1` or
+`Remove-MECMStoreApp.ps1` in this release; the ownership marker stays
+`[WindowsStoreOfflineToolkit:v2.2]`.
 
 Two new scripts remove Store apps from a device. Both are written for MECM
 **Run Scripts** (Local SYSTEM) and end their output with a line starting
