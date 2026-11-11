@@ -29,6 +29,8 @@ Built specifically for **disconnected, air-gapped, isolated, and enterprise MECM
 | [`Download-StoreApp.ps1`](Download-StoreApp.ps1) | Downloads Store app packages and required framework dependencies directly from Microsoft delivery servers (defaults to `x64`). |
 | [`Publish-MECMStoreApp.ps1`](Publish-MECMStoreApp.ps1) | Automates creating native MECM applications with "Provision for all users", stages content to UNC, and builds sequenced **Application Groups**. |
 | [`Remove-MECMStoreApp.ps1`](Remove-MECMStoreApp.ps1) | Cleanup utility for testing: removes toolkit-owned Application Groups, Applications, Console Folders, and optional staged UNC content. |
+| [`Remove-StoreApp.ps1`](Remove-StoreApp.ps1) | Client-side removal for **MECM Run Scripts**: removes one Store app (exact package name) for all users and deprovisions it. Refuses frameworks, Windows system packages, packages other apps depend on, and apps Windows flags NonRemovable unless `-ForceProtected Yes` is passed. |
+| [`Remove-AppInstaller.ps1`](Remove-AppInstaller.ps1) | Client-side forced removal of App Installer (winget) for **MECM Run Scripts**, for Windows builds that flag it NonRemovable. Uses an unsupported method - read the script header first. |
 | [`MECM-Store-App-Deployment-Guide.md`](MECM-Store-App-Deployment-Guide.md) | Comprehensive step-by-step guide for creating native MECM applications and sequencing them in an **Application Group**. |
 
 ---

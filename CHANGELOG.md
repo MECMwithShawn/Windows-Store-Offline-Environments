@@ -4,6 +4,40 @@ All notable changes to the Windows Store Offline Environments toolkit.
 
 ---
 
+## Unreleased (after v2.2)
+
+### Client-side removal scripts for MECM Run Scripts
+
+Two new scripts remove Store apps from a device. Both are written for MECM
+**Run Scripts** (Local SYSTEM) and end their output with a line starting
+`SUCCESS`, `REFUSED` or `FAILED`.
+
+- `Remove-StoreApp.ps1 -Name <exact package name> [-ForceProtected Yes|No]`
+  removes one app for all users and deprovisions it. It always refuses
+  wildcards, framework packages, packages signed as part of Windows and
+  packages another installed package depends on. Apps Windows flags
+  NonRemovable are refused unless `-ForceProtected Yes` is passed.
+- `Remove-AppInstaller.ps1` force-removes Microsoft.DesktopAppInstaller
+  (winget). Windows 11 build 26200 and Server 2025 flag it NonRemovable and
+  refuse the supported cmdlets with `0x80070032` / `0x80073CFA`.
+
+The forced path writes temporary `EndOfLife` registry markers under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore`, removes
+the package and deletes the markers again. **This bypasses an OS protection and
+is not supported by Microsoft.**
+
+Notes:
+
+- When adding `Remove-StoreApp.ps1` to Run Scripts, define the parameters
+  `Name` (required) and `ForceProtected` (default `No`) in the console wizard.
+- Exit codes are 0 (removed or not present), 1 (failed), 2 (refused). MECM Run
+  Scripts shows 0 for success and a generic `-2147467259` (`0x80004005`) for
+  any non-zero code, so read the last output line for the detail.
+- A device still targeted by a Required deployment of the app gets it
+  reinstalled at the next application evaluation.
+- Tested on Windows 11 build 26200 only, with no user signed in.
+
+---
 ## v2.2
 
 ### App Installer / winget can be downloaded by name
